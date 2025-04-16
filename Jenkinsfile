@@ -45,12 +45,7 @@ pipeline {
 
                     sh """
                         docker tag oai-gnb:${RAN_TAG} ghcr.io/\$GHCR_USER/\$REPO_NAME/oai-gnb:${RAN_TAG}
-                        docker tag oai-gnb-aw2s:${RAN_TAG} ghcr.io/\$GHCR_USER/\$REPO_NAME/oai-gnb-aw2s:${RAN_TAG}
-                        docker tag oai-nr-cuup:${RAN_TAG} ghcr.io/\$GHCR_USER/\$REPO_NAME/oai-nr-cuup:${RAN_TAG}
-
                         docker push ghcr.io/\$GHCR_USER/\$REPO_NAME/oai-gnb:${RAN_TAG}
-                        docker push ghcr.io/\$GHCR_USER/\$REPO_NAME/oai-gnb-aw2s:${RAN_TAG}
-                        docker push ghcr.io/\$GHCR_USER/\$REPO_NAME/oai-nr-cuup:${RAN_TAG}
                     """
                 }
             }
@@ -59,7 +54,7 @@ pipeline {
 
     post {
         success {
-            echo "Docker images successfully built and pushed to GHCR."
+            echo "Docker image successfully built and pushed to GHCR."
         }
         failure {
             echo "Pipeline failed!"
