@@ -63,8 +63,3 @@ else
     echo "${new_args[@]}"
     exec "${new_args[@]}"
 fi
-
-# launch Prometheus exporter in the background
-echo "=================================="
-echo "== Starting Prometheus log metrics exporter"
-python3 $PREFIX/gnb_metrics_exporter.py &

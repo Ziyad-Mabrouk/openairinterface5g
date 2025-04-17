@@ -154,4 +154,8 @@ EXPOSE 9200
 
 COPY --from=gnb-base /tini /tini
 ENTRYPOINT ["/tini", "-v", "--", "/opt/oai-gnb/bin/entrypoint.sh"]
-CMD ["/opt/oai-gnb/bin/nr-softmodem"]
+#CMD ["/opt/oai-gnb/bin/nr-softmodem"]
+
+COPY ./docker/scripts/start.sh /opt/oai-gnb/start.sh
+RUN chmod +x /opt/oai-gnb/start.sh
+CMD ["/opt/oai-gnb/start.sh"]
