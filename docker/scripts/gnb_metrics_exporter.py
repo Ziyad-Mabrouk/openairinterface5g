@@ -31,56 +31,56 @@ log_paths = {
     "rrc": "/opt/oai-gnb/nrRRC_stats.log",
 }
 
-def wait_for_logs():
-    print("Waiting for all log files to appear...")
-    while not all(os.path.isfile(p) for p in log_paths.values()):
-        time.sleep(1)
-    print("All log files found. Exporter is ready.")
-
 def parse_logs():
-    try:
-        with open(log_paths["mac"], "r") as f:
-            mac = f.read()
-            if match := re.search(r'PH\s+(\d+)', mac):
-                ph.set(int(match.group(1)))
-            if match := re.search(r'average RSRP\s+(-?\d+)', mac):
-                rsrp.set(int(match.group(1)))
-            if match := re.search(r'SNR\s+([\d.]+)\s+dB', mac):
-                snr.set(float(match.group(1)))
-            if match := re.search(r'BLER\s+([\d.]+)', mac):
-                bler.set(float(match.group(1)))
-            if match := re.search(r'MCS\s+\(\d+\)\s+(\d+)', mac):
-                mcs.set(int(match.group(1)))
-            if match := re.search(r'MAC:\s+TX\s+(\d+)\s+RX\s+(\d+)', mac):
-                mac_tx.set(int(match.group(1)))
-                mac_rx.set(int(match.group(2)))
-    except Exception as e:
-        print(f"MAC parsing failed: {e}")
+    # MAC stats parsing
+    if os.path.isfile(log_paths["mac"]):
+        try:
+            with open(log_paths["mac"], "r") as f:
+                mac = f.read()
+                if match := re.search(r'PH\s+(\d+)', mac):
+                    ph.set(int(match.group(1)))
+                if match := re.search(r'average RSRP\s+(-?\d+)', mac):
+                    rsrp.set(int(match.group(1)))
+                if match := re.search(r'SNR\s+([\d.]+)\s+dB', mac):
+                    snr.set(float(match.group(1)))
+                if match := re.search(r'BLER\s+([\d.]+)', mac):
+                    bler.set(float(match.group(1)))
+                if match := re.search(r'MCS\s+\(\d+\)\s+(\d+)', mac):
+                    mcs.set(int(match.group(1)))
+                if match := re.search(r'MAC:\s+TX\s+(\d+)\s+RX\s+(\d+)', mac):
+                    mac_tx.set(int(match.group(1)))
+                    mac_rx.set(int(match.group(2)))
+        except Exception as e:
+            print(f"MAC parsing failed: {e}")
 
-    try:
-        with open(log_paths["l1"], "r") as f:
-            l1 = f.read()
-            if match := re.search(r'avg_I0\s+=\s+([\d.]+)', l1):
-                avg_io.set(float(match.group(1)))
-            if match := re.search(r'PRACH I0\s+=\s+([\d.]+)', l1):
-                prach_i0.set(float(match.group(1)))
-            if match := re.search(r'ulsch_power\[0\]\s+([\d,]+)', l1):
-                ulsch_power.set(float(match.group(1).replace(",", ".")))
-            if match := re.search(r'ulsch_noise_power\[0\]\s+([\d.]+)', l1):
-                ulsch_noise_power.set(float(match.group(1)))
-    except Exception as e:
-        print(f"L1 parsing failed: {e}")
+    # L1 stats parsing
+    if os.path.isfile(log_paths["l1"]):
+        try:
+            with open(log_paths["l1"], "r") as f:
+                l1 = f.read()
+                if match := re.search(r'avg_I0\s+=\s+([\d.]+)', l1):
+                    avg_io.set(float(match.group(1)))
+                if match := re.search(r'PRACH I0\s+=\s+([\d.]+)', l1):
+                    prach_i0.set(float(match.group(1)))
+                if match := re.search(r'ulsch_power\[0\]\s+([\d,]+)', l1):
+                    ulsch_power.set(float(match.group(1).replace(",", ".")))
+                if match := re.search(r'ulsch_noise_power\[0\]\s+([\d.]+)', l1):
+                    ulsch_noise_power.set(float(match.group(1)))
+        except Exception as e:
+            print(f"L1 parsing failed: {e}")
 
-    try:
-        with open(log_paths["rrc"], "r") as f:
-            rrc = f.read()
-            if match := re.search(r'last RRC activity:\s+(\d+)', rrc):
-                rrc_activity.set(int(match.group(1)))
-            if match := re.search(r'status\s+(\w+)', rrc):
-                status = 1 if match.group(1).lower() == "established" else 0
-                pdu_status.set(status)
-    except Exception as e:
-        print(f"RRC parsing failed: {e}")
+    # RRC stats parsing
+    if os.path.isfile(log_paths["rrc"]):
+        try:
+            with open(log_paths["rrc"], "r") as f:
+                rrc = f.read()
+                if match := re.search(r'last RRC activity:\s+(\d+)', rrc):
+                    rrc_activity.set(int(match.group(1)))
+                if match := re.search(r'status\s+(\w+)', rrc):
+                    status = 1 if match.group(1).lower() == "established" else 0
+                    pdu_status.set(status)
+        except Exception as e:
+            print(f"RRC parsing failed: {e}")
 
 class MetricsHandler(BaseHTTPRequestHandler):
     def do_GET(self):
@@ -100,5 +100,4 @@ def start_server(port=9200):
     server.serve_forever()
 
 if __name__ == '__main__':
-    wait_for_logs()
     start_server()
