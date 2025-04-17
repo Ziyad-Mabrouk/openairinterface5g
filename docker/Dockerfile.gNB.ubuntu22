@@ -146,12 +146,10 @@ WORKDIR /opt/oai-gnb
 #EXPOSE 50000/udp # IF5 / ORI (control)
 #EXPOSE 50001/udp # IF5 / ECPRI (data)
 
-# Copy Python metrics-exporter
+# Copy Python gnb_metrics-exporter
 COPY ./docker/scripts/gnb_metrics_exporter.py ./gnb_metrics_exporter.py
 
-RUN python3 ./gnb_metrics_exporter.py
-
-# Expose metrics-exporter port
+# Expose gnb_metrics-exporter port
 EXPOSE 9200
 
 COPY --from=gnb-base /tini /tini
