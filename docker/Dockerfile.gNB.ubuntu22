@@ -149,6 +149,8 @@ WORKDIR /opt/oai-gnb
 # Copy Python metrics-exporter
 COPY ./docker/scripts/gnb_metrics_exporter.py ./gnb_metrics_exporter.py
 
+RUN python3 ./gnb_metrics_exporter.py
+
 # Expose metrics-exporter port
 EXPOSE 9200
 
