@@ -46,6 +46,11 @@ fi
 # enable printing of stack traces on assert
 export OAI_GDBSTACKS=1
 
+# Launch Prometheus exporter in the background
+echo "=================================="
+echo "== Starting Prometheus log metrics exporter"
+python3 $PREFIX/gnb_metrics_exporter.py &
+
 echo "=================================="
 echo "== Starting gNB soft modem"
 if [[ -v USE_ADDITIONAL_OPTIONS ]]; then
