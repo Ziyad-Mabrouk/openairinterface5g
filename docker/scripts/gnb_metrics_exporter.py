@@ -1,7 +1,7 @@
 from prometheus_client import Gauge, CollectorRegistry, generate_latest, CONTENT_TYPE_LATEST
 from http.server import BaseHTTPRequestHandler, HTTPServer
 import re
-import threading
+import os
 import time
 
 registry = CollectorRegistry()
@@ -25,9 +25,21 @@ ulsch_noise_power = Gauge('gnb_ulsch_noise_power', 'ULSCH Noise Power', registry
 rrc_activity = Gauge('gnb_rrc_last_activity_seconds', 'Time since last RRC activity', registry=registry)
 pdu_status = Gauge('gnb_pdu_session_established', 'PDU Session Established (1/0)', registry=registry)
 
+log_paths = {
+    "mac": "/opt/oai-gnb/nrMAC_stats.log",
+    "l1": "/opt/oai-gnb/nrL1_stats.log",
+    "rrc": "/opt/oai-gnb/nrRRC_stats.log",
+}
+
+def wait_for_logs():
+    print("Waiting for all log files to appear...")
+    while not all(os.path.isfile(p) for p in log_paths.values()):
+        time.sleep(1)
+    print("All log files found. Exporter is ready.")
+
 def parse_logs():
     try:
-        with open("/opt/oai-gnb/nrMAC_stats.log", "r") as f:
+        with open(log_paths["mac"], "r") as f:
             mac = f.read()
             if match := re.search(r'PH\s+(\d+)', mac):
                 ph.set(int(match.group(1)))
@@ -46,7 +58,7 @@ def parse_logs():
         print(f"MAC parsing failed: {e}")
 
     try:
-        with open("/opt/oai-gnb/nrL1_stats.log", "r") as f:
+        with open(log_paths["l1"], "r") as f:
             l1 = f.read()
             if match := re.search(r'avg_I0\s+=\s+([\d.]+)', l1):
                 avg_io.set(float(match.group(1)))
@@ -60,7 +72,7 @@ def parse_logs():
         print(f"L1 parsing failed: {e}")
 
     try:
-        with open("/opt/oai-gnb/nrRRC_stats.log", "r") as f:
+        with open(log_paths["rrc"], "r") as f:
             rrc = f.read()
             if match := re.search(r'last RRC activity:\s+(\d+)', rrc):
                 rrc_activity.set(int(match.group(1)))
@@ -70,14 +82,10 @@ def parse_logs():
     except Exception as e:
         print(f"RRC parsing failed: {e}")
 
-def metrics_loop():
-    while True:
-        parse_logs()
-        time.sleep(1)
-
 class MetricsHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         if self.path == '/metrics':
+            parse_logs()  # On-demand parsing
             self.send_response(200)
             self.send_header('Content-Type', CONTENT_TYPE_LATEST)
             self.end_headers()
@@ -92,5 +100,5 @@ def start_server(port=9200):
     server.serve_forever()
 
 if __name__ == '__main__':
-    threading.Thread(target=start_server, daemon=True).start()
-    metrics_loop()
+    wait_for_logs()
+    start_server()
