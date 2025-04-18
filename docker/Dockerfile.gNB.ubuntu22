@@ -153,10 +153,11 @@ COPY ./docker/scripts/gnb_metrics_exporter.py ./gnb_metrics_exporter.py
 COPY ./docker/scripts/gnb_supervisord.conf /etc/supervisor/conf.d/gnb_supervisord.conf
 
 # Expose gnb_metrics-exporter port
-EXPOSE 9200
+EXPOSE 9090
 
 COPY --from=gnb-base /tini /tini
 ENTRYPOINT ["/tini", "-v", "--", "/opt/oai-gnb/bin/entrypoint.sh"]
 #CMD ["/opt/oai-gnb/bin/nr-softmodem"]
 
-CMD ["/usr/bin/supervisord", "-c", "/etc/supervisor/conf.d/gnb_supervisord.conf"]
+#CMD ["/usr/bin/supervisord", "-c", "/etc/supervisor/conf.d/gnb_supervisord.conf"]
+CMD bash -c "/opt/oai-gnb/bin/nr-softmodem & python3 /opt/oai-gnb/gnb_metrics_exporter.py"

@@ -94,7 +94,7 @@ class MetricsHandler(BaseHTTPRequestHandler):
             self.send_response(404)
             self.end_headers()
 
-def start_server(port=9200):
+def start_server(port=9090):
     print(f"Starting Prometheus exporter on port {port}")
     server = HTTPServer(('0.0.0.0', port), MetricsHandler)
     server.serve_forever()
