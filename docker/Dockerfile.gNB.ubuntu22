@@ -150,7 +150,7 @@ WORKDIR /opt/oai-gnb
 # Copy Python gnb_metrics-exporter
 COPY ./docker/scripts/gnb_metrics_exporter.py ./gnb_metrics_exporter.py
 
-COPY ./docker/scripts/gnb_supervisord.conf /etc/supervisor/conf.d/gnb_supervisord.conf
+#COPY ./docker/scripts/gnb_supervisord.conf /etc/supervisor/conf.d/gnb_supervisord.conf
 
 # Expose gnb_metrics-exporter port
 EXPOSE 9090
