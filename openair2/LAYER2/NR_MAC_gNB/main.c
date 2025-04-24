@@ -95,7 +95,8 @@ void *nrmac_stats_thread(void *arg) {
     p += print_meas_log(&gNB->nr_srs_tpmi_computation_timer, "UL-TPMI computation time", NULL, NULL, p, end - p);
     fwrite(output, p - output, 1, file);
     fflush(file);
-    sleep(1);
+    //sleep(1);
+    usleep(100 * 1000); // 100ms
     fseek(file,0,SEEK_SET);
   }
   fclose(file);
