@@ -292,7 +292,8 @@ void *nrL1_stats_thread(void *param) {
   reset_meas(&gNB->dlsch_resource_mapping_stats);
   reset_meas(&gNB->dlsch_precoding_stats);
   while (!oai_exit) {
-    sleep(1);
+    //sleep(1);
+    usleep(100 * 1000); // 100ms
     dump_nr_I0_stats(fd,gNB);
     dump_pdsch_stats(fd,gNB);
     dump_pusch_stats(fd,gNB);
