@@ -96,7 +96,7 @@ void *nrmac_stats_thread(void *arg) {
     fwrite(output, p - output, 1, file);
     fflush(file);
     //sleep(1);
-    usleep(100 * 1000); // 100ms
+    usleep(1 * 1000); // 1ms
     fseek(file,0,SEEK_SET);
   }
   fclose(file);
