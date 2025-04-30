@@ -2549,7 +2549,7 @@ void *rrc_gnb_task(void *args_p) {
   if (!IS_SOFTMODEM_NOSTATS) {
     /* timer to write stats to file */
     //timer_setup(1, 0, TASK_RRC_GNB, 0, TIMER_PERIODIC, NULL, &stats_timer_id);
-    timer_setup(0, 1000, TASK_RRC_GNB, 0, TIMER_PERIODIC, NULL, &stats_timer_id); // 1ms
+    timer_setup(0, 50000, TASK_RRC_GNB, 0, TIMER_PERIODIC, NULL, &stats_timer_id); // 50ms
   }
 
   itti_mark_task_ready(TASK_RRC_GNB);

@@ -169,6 +169,7 @@ typedef struct {
      unsigned int   loopcount;            // loop command param: number of loop iteration
      unsigned int   loopdelay;            // loop command param: delay in ms between 2 iterations
      unsigned int   phyprntbuff_size;     // for phy module,  dump_eNB_stats function buffer size
+     unsigned int   loginterval;          // time interval (us) of writing log files nrMACstats nrL1stats and nrRRCstats
 } telnetsrv_params_t;
 
 
