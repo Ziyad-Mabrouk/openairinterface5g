@@ -91,8 +91,7 @@ paramdef_t telnetoptions[] = {
     {"logfile", "log file when redirecting", PARAMFLAG_NOFREE, .strptr = &telnetparams.logfile, .defstrval = "oaisoftmodem.log", TYPE_STRING, 0},
     {"phypbsize", "<phy dump buff size (bytes)>\n", 0, .uptr = &telnetparams.phyprntbuff_size, .defuintval = 65000, TYPE_UINT, 0},
     {TELNETSRV_OPTNAME_STATICMOD, "<static modules selection>\n", 0, .strlistptr = NULL, .defstrlistval = telnet_defstatmod, TYPE_STRINGLIST, (sizeof(telnet_defstatmod) / sizeof(char *))},
-    {TELNETSRV_OPTNAME_SHRMOD, "<dynamic modules selection>\n", 0, .strlistptr = NULL, .defstrlistval = NULL, TYPE_STRINGLIST, 0},
-    {"loginterval", "<log writing time interval (us) for nrMACstats nrL1stats and nrRRCstats>\n", 0, .uptr = &telnetparams.loginterval, .defuintval = 1000000, TYPE_UINT, 0}
+    {TELNETSRV_OPTNAME_SHRMOD, "<dynamic modules selection>\n", 0, .strlistptr = NULL, .defstrlistval = NULL, TYPE_STRINGLIST, 0}
 };
 // clang-format on
 
@@ -114,7 +113,6 @@ telnetshell_vardef_t telnet_vardef[] = {{"debug", TELNET_VARTYPE_INT32, 0, &teln
                                         {"hsize", TELNET_VARTYPE_INT32, 0, &telnetparams.histsize},
                                         {"hfile", TELNET_VARTYPE_STRING, TELNET_CHECKVAL_RDONLY, &telnetparams.histfile},
                                         {"logfile", TELNET_VARTYPE_STRING, 0, &telnetparams.logfile},
-                                        {"loginterval", TELNET_VARTYPE_INT32, 0, &telnetparams.loginterval},
                                         {"", 0, 0, NULL}};
 
 telnetshell_cmddef_t telnet_cmdarray[] = {

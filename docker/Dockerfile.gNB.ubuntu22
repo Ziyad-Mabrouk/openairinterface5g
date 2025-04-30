@@ -146,5 +146,5 @@
     
     COPY --from=gnb-base /tini /tini
     ENTRYPOINT ["/tini", "-v", "--", "/opt/oai-gnb/bin/entrypoint.sh"]
-    CMD ["/opt/oai-gnb/bin/nr-softmodem --telnetsrv"]
+    CMD ["/opt/oai-gnb/bin/nr-softmodem"]
     
