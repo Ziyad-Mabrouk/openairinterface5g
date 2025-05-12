@@ -15,9 +15,9 @@ pipeline {
                     echo "Building oai-gnb:with-metrics Docker image..."
 
                     sh """
-                        docker build --no-cache --target ran-base --tag ran-base:latest --file docker/Dockerfile.base.ubuntu22 .
-                        docker build --no-cache --target ran-build --tag ran-build:latest --file docker/Dockerfile.build.ubuntu22 .
-                        docker build --no-cache --no-cache --target oai-gnb --tag oai-gnb:${RAN_TAG} --file docker/Dockerfile.gNB.ubuntu22 .
+                        docker build --target ran-base --tag ran-base:latest --file docker/Dockerfile.base.ubuntu22 .
+                        docker build --target ran-build --tag ran-build:latest --file docker/Dockerfile.build.ubuntu22 .
+                        docker build --target oai-gnb --tag oai-gnb:${RAN_TAG} --file docker/Dockerfile.gNB.ubuntu22 .
                     """
                 }
             }
