@@ -5,7 +5,7 @@ pipeline {
         GHCR_TOKEN = credentials('github-personal-access-token')
         GHCR_USER = 'ziyad-mabrouk'
         REPO_NAME = 'openairinterface5g'
-        RAN_TAG = 'with-metrics'
+        RAN_TAG = 'test'
     }
 
     stages {

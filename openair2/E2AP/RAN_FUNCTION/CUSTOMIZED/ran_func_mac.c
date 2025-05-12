@@ -21,6 +21,7 @@
 
 #include "ran_func_mac.h"
 #include <assert.h>
+#include <stdatomic.h>
 
 static
 const int mod_id = 0;
@@ -120,11 +121,23 @@ void read_mac_setup_sm(void* data)
   assert(0 !=0 && "Not supported");
 }
 
+
+extern atomic_int gnb_mac_log_interval_ms;
+
 sm_ag_if_ans_t write_ctrl_mac_sm(void const* data)
 {
   assert(data != NULL);
-  printf("write_ctrl callback for MAC SM: operation not supported\n");
   sm_ag_if_ans_t ans = {0};
+
+  const mac_ctrl_msg_t* msg = (const mac_ctrl_msg_t*)data;
+
+  if (msg->log_interval_ms >= 1) {
+    atomic_store(&gnb_mac_log_interval_ms, msg->log_interval_ms);
+    printf("[MAC CTRL] Updated log interval to %u ms\n", msg->log_interval_ms);
+  } else {
+    printf("[MAC CTRL] Invalid log interval: %u\n", msg->log_interval_ms);
+  }
+
   return ans;
 }
 

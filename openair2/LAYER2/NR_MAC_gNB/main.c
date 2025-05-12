@@ -37,6 +37,7 @@
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <stdatomic.h>
 #include <string.h>
 #include <strings.h>
 #include <unistd.h>
@@ -72,6 +73,8 @@
 
 #define MACSTATSSTRLEN 36256
 
+atomic_int gnb_mac_log_interval_ms = 50;  // default 50ms
+
 void *nrmac_stats_thread(void *arg) {
 
   gNB_MAC_INST *gNB = (gNB_MAC_INST *)arg;
@@ -80,6 +83,8 @@ void *nrmac_stats_thread(void *arg) {
   const char *end = output + MACSTATSSTRLEN;
   FILE *file = fopen("nrMAC_stats.log","w");
   AssertFatal(file!=NULL,"Cannot open nrMAC_stats.log, error %s\n",strerror(errno));
+
+  extern atomic_int gnb_mac_log_interval_ms;
 
   while (oai_exit == 0) {
     char *p = output;
@@ -96,7 +101,7 @@ void *nrmac_stats_thread(void *arg) {
     fwrite(output, p - output, 1, file);
     fflush(file);
     //sleep(1);
-    usleep(50 * 1000); // 50ms
+    usleep(atomic_load(&gnb_mac_log_interval_ms) * 1000);
     fseek(file,0,SEEK_SET);
   }
   fclose(file);

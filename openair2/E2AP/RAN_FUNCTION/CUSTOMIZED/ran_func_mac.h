@@ -27,11 +27,14 @@
 #include "openair2/LAYER2/NR_MAC_gNB/mac_proto.h"
 #include "openair2/E2AP/flexric/src/util/time_now_us.h"
 
-
 bool read_mac_sm(void*);
 
 void read_mac_setup_sm(void*);
 
 sm_ag_if_ans_t write_ctrl_mac_sm(void const*);
+
+typedef struct {
+    uint32_t log_interval_ms;
+  } mac_ctrl_msg_t;
 
 #endif
