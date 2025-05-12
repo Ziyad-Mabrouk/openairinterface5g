@@ -33,8 +33,4 @@ void read_mac_setup_sm(void*);
 
 sm_ag_if_ans_t write_ctrl_mac_sm(void const*);
 
-typedef struct {
-    uint32_t log_interval_ms;
-  } mac_ctrl_msg_t;
-
 #endif
