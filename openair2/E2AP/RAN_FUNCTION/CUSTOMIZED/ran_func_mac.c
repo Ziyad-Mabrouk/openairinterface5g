@@ -129,13 +129,12 @@ sm_ag_if_ans_t write_ctrl_mac_sm(void const* data)
   assert(data != NULL);
   sm_ag_if_ans_t ans = {0};
 
-  const mac_ctrl_msg_t* msg = (const mac_ctrl_msg_t*)data;
+  mac_ctrl_req_data_t const* ctrl = (mac_ctrl_req_data_t const*)data;
 
-  if (msg->log_interval_ms >= 1) {
+  mac_ctrl_msg_t const msg = ctrl->msg;
+
+  if (msg->log_interval_ms > 0) {
     atomic_store(&gnb_mac_log_interval_ms, msg->log_interval_ms);
-    printf("[MAC CTRL] Updated log interval to %u ms\n", msg->log_interval_ms);
-  } else {
-    printf("[MAC CTRL] Invalid log interval: %u\n", msg->log_interval_ms);
   }
 
   return ans;
