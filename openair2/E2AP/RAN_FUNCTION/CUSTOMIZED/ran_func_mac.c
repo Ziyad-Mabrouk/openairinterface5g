@@ -129,7 +129,7 @@ sm_ag_if_ans_t write_ctrl_mac_sm(void const* data)
 
   mac_ctrl_req_data_t const* ctrl = (mac_ctrl_req_data_t const*)data;
 
-  mac_ctrl_msg_t const msg = ctrl->msg;
+  mac_ctrl_msg_t const* msg = &ctrl->msg;
 
   extern atomic_int gnb_mac_log_interval_ms;
 
