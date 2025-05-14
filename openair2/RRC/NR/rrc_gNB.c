@@ -2549,7 +2549,8 @@ void *rrc_gnb_task(void *args_p) {
   if (!IS_SOFTMODEM_NOSTATS) {
     /* timer to write stats to file */
     //timer_setup(1, 0, TASK_RRC_GNB, 0, TIMER_PERIODIC, NULL, &stats_timer_id);
-    timer_setup(0, 50000, TASK_RRC_GNB, 0, TIMER_PERIODIC, NULL, &stats_timer_id); // 50ms
+    extern atomic_int gnb_mac_log_interval_ms;
+    timer_setup(0, atomic_load(&gnb_mac_log_interval_ms) * 1000, TASK_RRC_GNB, 0, TIMER_PERIODIC, NULL, &stats_timer_id); // for now, use the same logging interval used to dump nrmac stats
   }
 
   itti_mark_task_ready(TASK_RRC_GNB);

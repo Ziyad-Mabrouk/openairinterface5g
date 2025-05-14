@@ -73,7 +73,7 @@
 
 #define MACSTATSSTRLEN 36256
 
-atomic_int gnb_mac_log_interval_ms = 50;  // default 50ms
+atomic_int gnb_mac_log_interval_ms = 1000;  // default 1s
 
 void *nrmac_stats_thread(void *arg) {
 

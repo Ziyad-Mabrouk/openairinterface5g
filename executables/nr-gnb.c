@@ -293,7 +293,8 @@ void *nrL1_stats_thread(void *param) {
   reset_meas(&gNB->dlsch_precoding_stats);
   while (!oai_exit) {
     //sleep(1);
-    usleep(50 * 1000); // 50ms
+    extern atomic_int gnb_mac_log_interval_ms;
+    usleep(atomic_load(&gnb_mac_log_interval_ms) * 1000); // for now, use the same logging interval used to dump nrmac stats
     dump_nr_I0_stats(fd,gNB);
     dump_pdsch_stats(fd,gNB);
     dump_pusch_stats(fd,gNB);
