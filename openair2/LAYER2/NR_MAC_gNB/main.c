@@ -84,8 +84,6 @@ void *nrmac_stats_thread(void *arg) {
   FILE *file = fopen("nrMAC_stats.log","w");
   AssertFatal(file!=NULL,"Cannot open nrMAC_stats.log, error %s\n",strerror(errno));
 
-  extern atomic_int gnb_mac_log_interval_ms;
-
   while (oai_exit == 0) {
     char *p = output;
     NR_SCHED_LOCK(&gNB->sched_lock);
@@ -101,6 +99,7 @@ void *nrmac_stats_thread(void *arg) {
     fwrite(output, p - output, 1, file);
     fflush(file);
     //sleep(1);
+    extern atomic_int gnb_mac_log_interval_ms;
     usleep(atomic_load(&gnb_mac_log_interval_ms) * 1000);
     fseek(file,0,SEEK_SET);
   }
