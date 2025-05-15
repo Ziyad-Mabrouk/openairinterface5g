@@ -4179,54 +4179,67 @@ void find_period_offset_SR(const NR_SchedulingRequestResourceConfig_t *Schedulin
   NR_SchedulingRequestResourceConfig__periodicityAndOffset_PR P_O = SchedulingReqRec->periodicityAndOffset->present;
   switch (P_O){
     case NR_SchedulingRequestResourceConfig__periodicityAndOffset_PR_sl1:
+      LOG_I(RRC, "sl1 happened");
       *period = 1;
       *offset = SchedulingReqRec->periodicityAndOffset->choice.sl1;
       break;
     case NR_SchedulingRequestResourceConfig__periodicityAndOffset_PR_sl2:
+      LOG_I(RRC, "sl2 happened");
       *period = 2;
       *offset = SchedulingReqRec->periodicityAndOffset->choice.sl2;
       break;
     case NR_SchedulingRequestResourceConfig__periodicityAndOffset_PR_sl4:
+      LOG_I(RRC, "sl4 happened");
       *period = 4;
       *offset = SchedulingReqRec->periodicityAndOffset->choice.sl4;
       break;
     case NR_SchedulingRequestResourceConfig__periodicityAndOffset_PR_sl5:
+      LOG_I(RRC, "sl5 happened");
       *period = 5;
       *offset = SchedulingReqRec->periodicityAndOffset->choice.sl5;
       break;
     case NR_SchedulingRequestResourceConfig__periodicityAndOffset_PR_sl8:
+      LOG_I(RRC, "sl8 happened");
       *period = 8;
       *offset = SchedulingReqRec->periodicityAndOffset->choice.sl8;
       break;
     case NR_SchedulingRequestResourceConfig__periodicityAndOffset_PR_sl10:
+      LOG_I(RRC, "sl10 happened");
       *period = 10;
       *offset = SchedulingReqRec->periodicityAndOffset->choice.sl10;
       break;
     case NR_SchedulingRequestResourceConfig__periodicityAndOffset_PR_sl16:
+      LOG_I(RRC, "sl16 happened");
       *period = 16;
       *offset = SchedulingReqRec->periodicityAndOffset->choice.sl16;
       break;
     case NR_SchedulingRequestResourceConfig__periodicityAndOffset_PR_sl20:
+      LOG_I(RRC, "sl20 happened");
       *period = 20;
       *offset = SchedulingReqRec->periodicityAndOffset->choice.sl20;
       break;
     case NR_SchedulingRequestResourceConfig__periodicityAndOffset_PR_sl40:
+      LOG_I(RRC, "sl40 happened");
       *period = 40;
       *offset = SchedulingReqRec->periodicityAndOffset->choice.sl40;
       break;
     case NR_SchedulingRequestResourceConfig__periodicityAndOffset_PR_sl80:
+      LOG_I(RRC, "sl80 happened");
       *period = 80;
       *offset = SchedulingReqRec->periodicityAndOffset->choice.sl80;
       break;
     case NR_SchedulingRequestResourceConfig__periodicityAndOffset_PR_sl160:
+      LOG_I(RRC, "sl160 happened");
       *period = 160;
       *offset = SchedulingReqRec->periodicityAndOffset->choice.sl160;
       break;
     case NR_SchedulingRequestResourceConfig__periodicityAndOffset_PR_sl320:
+      LOG_I(RRC, "sl320 happened");
       *period = 320;
       *offset = SchedulingReqRec->periodicityAndOffset->choice.sl320;
       break;
     case NR_SchedulingRequestResourceConfig__periodicityAndOffset_PR_sl640:
+      LOG_I(RRC, "sl640 happened");
       *period = 640;
       *offset = SchedulingReqRec->periodicityAndOffset->choice.sl640;
       break;
