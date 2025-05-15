@@ -33,6 +33,8 @@
 #define _GNU_SOURCE
 #include <pthread.h>
 
+#include <stdatomic.h>
+
 #include "assertions.h"
 #include <common/utils/LOG/log.h>
 #include <common/utils/system.h>
