@@ -5,7 +5,7 @@ pipeline {
         GHCR_TOKEN = credentials('github-personal-access-token')
         GHCR_USER = 'ziyad-mabrouk'
         REPO_NAME = 'openairinterface5g'
-        RAN_TAG = 'test2'
+        RAN_TAG = 'test'
     }
 
     stages {
@@ -15,9 +15,9 @@ pipeline {
                     echo "Building oai-gnb:with-metrics Docker image..."
 
                     sh """
-                        docker build --target ran-base --tag ran-base:latest --file docker/Dockerfile.base.ubuntu22 .
-                        docker build --target ran-build --tag ran-build:latest --file docker/Dockerfile.build.ubuntu22 .
-                        docker build --target oai-gnb --tag oai-gnb:${RAN_TAG} --file docker/Dockerfile.gNB.ubuntu22 .
+                        docker build --no-cache --target ran-base --tag ran-base:latest --file docker/Dockerfile.base.rocky .
+                        docker build --no-cache --target ran-build --tag ran-build:latest --file docker/Dockerfile.build.rocky .
+                        docker build --no-cache --target oai-gnb --tag oai-gnb:${RAN_TAG} --file docker/Dockerfile.gNB.rocky .
                     """
                 }
             }
