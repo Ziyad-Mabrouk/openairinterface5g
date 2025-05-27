@@ -12,7 +12,7 @@ pipeline {
         stage('Build Docker Images') {
             steps {
                 script {
-                    echo "Building oai-gnb:with-metrics Docker image..."
+                    echo "Building oai-gnb:${RAN_TAG} Docker image..."
 
                     sh """
                         docker build --no-cache --target ran-base --tag ran-base:latest --file docker/Dockerfile.base.rocky .
