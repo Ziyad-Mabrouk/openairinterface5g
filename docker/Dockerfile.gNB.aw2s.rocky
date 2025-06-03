@@ -69,6 +69,7 @@ COPY --from=gnb-build \
     /oai-ran/cmake_targets/ran_build/build/libparams_libconfig.so \
     /oai-ran/cmake_targets/ran_build/build/libdfts.so \
     /oai-ran/cmake_targets/ran_build/build/libldpc*.so \
+    /oai-ran/cmake_targets/ran_build/build/libnrscope.so \
     /oai-ran/cmake_targets/ran_build/build/libtelnetsrv.so \
     /oai-ran/cmake_targets/ran_build/build/libparams_yaml.so \
     /usr/local/lib/
@@ -77,6 +78,9 @@ COPY --from=gnb-base \
     /lib64/libconfig.so.11 \
     /lib64/libforms.so.2 \
     /lib64/
+
+## Copy E2 SM models
+COPY --from=gnb-build /usr/local/lib64/flexric /usr/local/lib64/flexric
 
 RUN ln -s /usr/local/lib/libaw2sori_transpro.so /usr/local/lib/libthirdparty_transpro.so && \
     ln -s /usr/local/lib/liboai_eth_transpro.so /usr/local/lib/liboai_transpro.so && \
