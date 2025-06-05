@@ -15,9 +15,9 @@ pipeline {
                     echo "Building oai-gnb-aw2s:${RAN_TAG} Docker image..."
 
                     sh """
-                        docker build --no-cache --target ran-base --tag ran-base:latest --file docker/Dockerfile.base.rocky .
-                        docker build --no-cache --target ran-build --tag ran-build:latest --file docker/Dockerfile.build.rocky .
-                        docker build --no-cache --target oai-gnb-aw2s --tag oai-gnb-aw2s:${RAN_TAG} --file docker/Dockerfile.gNB.aw2s.rocky .
+                        docker build --no-cache --target ran-base --tag ran-base:latest --file docker/Dockerfile.base.ubuntu22 .
+                        docker build --no-cache --target ran-build --tag ran-build:latest --file docker/Dockerfile.build.ubuntu22 .
+                        docker build --no-cache --target oai-gnb-aw2s --tag oai-gnb-aw2s:${RAN_TAG} --file docker/Dockerfile.gNB.aw2s.ubuntu22 .
                     """
                 }
             }
