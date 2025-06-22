@@ -1,0 +1,61 @@
+name: Build & Push OAI gNB (AW2S) image
+
+on:
+  push:
+    branches: [ develop ]
+    paths:
+      - 'docker/**'
+      - '.github/workflows/build-ran.yml'
+  workflow_dispatch:
+
+env:
+  GHCR_USER: ziyad-mabrouk
+  REPO_NAME: openairinterface5g
+  RAN_TAG: test
+
+jobs:
+
+  build-and-push:
+    runs-on: ubuntu-22.04
+
+    steps:
+    - name: Checkout source
+      uses: actions/checkout@v4
+
+    - name: Log in to GHCR
+      run: echo "${{ secrets.GHCR_TOKEN }}" | docker login ghcr.io -u "${{ env.GHCR_USER }}" --password-stdin
+
+    - name: Build ran-base
+      run: |
+        docker build \
+          --no-cache \
+          --target ran-base \
+          --tag ran-base:latest \
+          -f docker/Dockerfile.base.ubuntu22 \
+          .
+    - name: Build ran-build
+      run: |
+        docker build \
+          --no-cache \
+          --target ran-build \
+          --tag ran-build:latest \
+          -f docker/Dockerfile.build.ubuntu22 \
+          .
+    - name: Build oai-gnb-aw2s
+      run: |
+        docker build \
+          --no-cache \
+          --target oai-gnb-aw2s \
+          --tag oai-gnb-aw2s:${{ env.RAN_TAG }} \
+          -f docker/Dockerfile.gNB.aw2s.ubuntu22 \
+          .
+
+    - name: Tag and push to GHCR
+      run: |
+        IMAGE_URI=ghcr.io/${{ env.GHCR_USER }}/${{ env.REPO_NAME }}/oai-gnb-aw2s:${{ env.RAN_TAG }}
+        docker tag oai-gnb-aw2s:${{ env.RAN_TAG }} "$IMAGE_URI"
+        docker push "$IMAGE_URI"
+
+    - name: Log out of GHCR
+      if: always()
+      run: docker logout ghcr.io

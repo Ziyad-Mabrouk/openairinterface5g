@@ -77,6 +77,8 @@ COPY --from=gnb-build \
     /oai-ran/cmake_targets/ran_build/build/libparams_yaml.so \
     /usr/local/lib/
 
+## Copy E2 SM models
+COPY --from=gnb-build /usr/local/lib/flexric /usr/local/lib/flexric
 
 RUN /bin/bash -c "ln -s /usr/local/lib/libaw2sori_transpro.so /usr/local/lib/libthirdparty_transpro.so" && \
     /bin/bash -c "ln -s /usr/local/lib/liboai_eth_transpro.so /usr/local/lib/liboai_transpro.so" && \
