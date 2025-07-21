@@ -44,7 +44,6 @@
 #include "NR_BCCH-BCH-Message.h"
 #include "NR_ServingCellConfigCommon.h"
 #include "NR_MIB.h"
-#include "RRC/NR/nr_rrc_config.h"
 #include "SCHED_NR/phy_frame_config_nr.h"
 #include "T.h"
 #include "asn_internal.h"
@@ -716,36 +715,32 @@ static void config_common(gNB_MAC_INST *nrmac,
   if (cfg->cell_config.frame_duplex_type.value == TDD)
     set_tdd_config_nr(cfg, fs);
 
-  int nb_tx = config->nb_bfw[0]; // number of tx antennas
-  int nb_beams = config->nb_bfw[1]; // number of beams
   // precoding matrix configuration (to be improved)
   cfg->pmi_list = init_DL_MIMO_codebook(nrmac, pdsch_AntennaPorts);
-  // beamforming matrix configuration
-  cfg->dbt_config.num_dig_beams = nb_beams;
-  if (nb_beams > 0) {
-    cfg->dbt_config.num_txrus = nb_tx;
-    cfg->dbt_config.dig_beam_list = malloc16(nb_beams * sizeof(*cfg->dbt_config.dig_beam_list));
-    AssertFatal(cfg->dbt_config.dig_beam_list, "out of memory\n");
-    for (int i = 0; i < nb_beams; i++) {
-      nfapi_nr_dig_beam_t *beam = &cfg->dbt_config.dig_beam_list[i];
-      beam->beam_idx = i;
-      beam->txru_list = malloc16(nb_tx * sizeof(*beam->txru_list));
-      for (int j = 0; j < nb_tx; j++) {
-        nfapi_nr_txru_t *txru = &beam->txru_list[j];
-        txru->dig_beam_weight_Re = config->bw_list[j + i * nb_tx] & 0xffff;
-        txru->dig_beam_weight_Im = (config->bw_list[j + i * nb_tx] >> 16) & 0xffff;
-        LOG_D(NR_MAC, "Beam %d Tx %d Weight (%d, %d)\n", i, j, txru->dig_beam_weight_Re, txru->dig_beam_weight_Im);
-      }
-    }
-  }
 
+  int nb_beams = config->nb_bfw[1]; // number of beams
   if (nrmac->beam_info.beam_allocation) {
+    LOG_I(NR_MAC, "Configuring analog beamforming in config_request message\n");
     cfg->analog_beamforming_ve.num_beams_period_vendor_ext.tl.tag = NFAPI_NR_FAPI_NUM_BEAMS_PERIOD_VENDOR_EXTENSION_TAG;
     cfg->analog_beamforming_ve.num_beams_period_vendor_ext.value = nrmac->beam_info.beams_per_period;
     cfg->num_tlv++;
     cfg->analog_beamforming_ve.analog_bf_vendor_ext.tl.tag = NFAPI_NR_FAPI_ANALOG_BF_VENDOR_EXTENSION_TAG;
     cfg->analog_beamforming_ve.analog_bf_vendor_ext.value = 1;  // analog BF enabled
     cfg->num_tlv++;
+    cfg->analog_beamforming_ve.total_num_beams_vendor_ext.tl.tag = NFAPI_NR_FAPI_TOTAL_NUM_BEAMS_VENDOR_EXTENSION_TAG;
+    cfg->analog_beamforming_ve.total_num_beams_vendor_ext.value = nb_beams;
+    cfg->num_tlv++;
+    cfg->analog_beamforming_ve.analog_beam_list = malloc16(nb_beams * sizeof(*cfg->analog_beamforming_ve.analog_beam_list));
+    for (int i = 0; i < nb_beams; i++) {
+      cfg->analog_beamforming_ve.analog_beam_list[i].tl.tag = NFAPI_NR_FAPI_ANALOG_BEAM_VENDOR_EXTENSION_TAG;
+      cfg->analog_beamforming_ve.analog_beam_list[i].value = config->bw_list[i];
+    }
+  } else {
+    cfg->analog_beamforming_ve.analog_bf_vendor_ext.value = 0;  // analog BF disabled
+    if (NFAPI_MODE == NFAPI_MONOLITHIC) {
+      cfg->analog_beamforming_ve.analog_bf_vendor_ext.tl.tag = NFAPI_NR_FAPI_ANALOG_BF_VENDOR_EXTENSION_TAG;
+      cfg->num_tlv++;
+    }
   }
 }
 
@@ -810,8 +805,6 @@ static void config_sched_ctrlCommon(gNB_MAC_INST *nr_mac)
   fill_coresetZero(sched_ctrlCommon->coreset, &type0_PDCCH_CSS_config);
   nr_mac->cset0_bwp_start = type0_PDCCH_CSS_config.cset_start_rb;
   nr_mac->cset0_bwp_size = type0_PDCCH_CSS_config.num_rbs;
-  sched_ctrlCommon->sched_pdcch =
-      set_pdcch_structure(NULL, sched_ctrlCommon->search_space, sched_ctrlCommon->coreset, scc, NULL, &type0_PDCCH_CSS_config);
 }
 
 void nr_mac_config_scc(gNB_MAC_INST *nrmac, NR_ServingCellConfigCommon_t *scc, const nr_mac_config_t *config)
@@ -857,14 +850,6 @@ void nr_mac_config_scc(gNB_MAC_INST *nrmac, NR_ServingCellConfigCommon_t *scc, c
   }
 
   find_SSB_and_RO_available(nrmac);
-
-  NR_COMMON_channels_t *cc = &nrmac->common_channels[0];
-  NR_SCHED_LOCK(&nrmac->sched_lock);
-  for (int n = 0; n < NR_NB_RA_PROC_MAX; n++) {
-    NR_RA_t *ra = &cc->ra[n];
-    nr_clear_ra_proc(ra);
-  }
-  NR_SCHED_UNLOCK(&nrmac->sched_lock);
 
   if (IS_SA_MODE(get_softmodem_params()))
     config_sched_ctrlCommon(nrmac);
@@ -942,6 +927,96 @@ bool nr_mac_configure_other_sib(gNB_MAC_INST *nrmac, int num_cu_sib, const f1ap_
   return true;
 }
 
+bool nr_update_sib19(const gnb_sat_position_update_t *sat_position)
+{
+  gNB_MAC_INST *nrmac = RC.nrmac[0];
+  NR_COMMON_channels_t *cc = &nrmac->common_channels[0];
+  NR_ServingCellConfigCommon_t *scc = cc->ServingCellConfigCommon;
+
+  if (!scc || !scc->ext2 || !scc->ext2->ntn_Config_r17)
+    return false;
+
+  const vector_t *pos = &sat_position->position;
+  const vector_t *vel = &sat_position->velocity;
+
+  LOG_D(NR_MAC, "SFN = %d, SubFrame = %d\n", sat_position->sfn, sat_position->subframe);
+  LOG_D(NR_MAC, "TA_Common: value %d, %f msec\n", sat_position->delay, sat_position->delay * 4.072e-6);
+  LOG_D(NR_MAC, "TA_CommonDrift: value %d, = %f µsec/sec\n", sat_position->drift, sat_position->drift * 0.2e-3);
+  LOG_D(NR_MAC, "TA_CommonDriftVariant: value %d, %f µsec/sec^2\n", sat_position->accel, sat_position->accel * 0.2e-4);
+  LOG_D(NR_MAC, "SAT Position: values %d/%d/%d, %.3f/%3f/%3f metres in X/Y/Z\n", pos->X, pos->Y, pos->Z, pos->X * 1.3, pos->Y * 1.3, pos->Z * 1.3);
+  LOG_D(NR_MAC, "SAT Velocity: values %d/%d/%d, %.3f/%3f/%3f m/s in X/Y/Z\n", vel->X, vel->Y, vel->Z, vel->X * 0.06, vel->Y * 0.06, vel->Z * 0.06);
+
+  NR_SCHED_LOCK(&nrmac->sched_lock);
+
+  if (!scc->ext2->ntn_Config_r17->epochTime_r17)
+    scc->ext2->ntn_Config_r17->epochTime_r17 = calloc (1, sizeof(*scc->ext2->ntn_Config_r17->epochTime_r17));
+
+  NR_EpochTime_r17_t *epoch_time_r17 = scc->ext2->ntn_Config_r17->epochTime_r17;
+  epoch_time_r17->sfn_r17 = sat_position->sfn;
+  epoch_time_r17->subFrameNR_r17 = sat_position->subframe;
+
+  if (!scc->ext2->ntn_Config_r17->ta_Info_r17)
+    scc->ext2->ntn_Config_r17->ta_Info_r17 = calloc(1, sizeof(*scc->ext2->ntn_Config_r17->ta_Info_r17));
+
+  NR_TA_Info_r17_t *sib19_ta_info = scc->ext2->ntn_Config_r17->ta_Info_r17;
+
+  // SIB19 provides Round trip delay on feeder link (between gNB and SAT).
+  sib19_ta_info->ta_Common_r17 = sat_position->delay;
+
+  if (sat_position->drift) {
+    if (!sib19_ta_info->ta_CommonDrift_r17)
+      sib19_ta_info->ta_CommonDrift_r17 = calloc(1, sizeof(*sib19_ta_info->ta_CommonDrift_r17));
+    *sib19_ta_info->ta_CommonDrift_r17 = sat_position->drift;
+  } else
+    free_and_zero(sib19_ta_info->ta_CommonDrift_r17);
+
+  if (sat_position->accel) {
+    if (!sib19_ta_info->ta_CommonDriftVariant_r17)
+      sib19_ta_info->ta_CommonDriftVariant_r17 = calloc(1, sizeof(*sib19_ta_info->ta_CommonDriftVariant_r17));
+    *sib19_ta_info->ta_CommonDriftVariant_r17 = sat_position->accel;
+  } else
+    free_and_zero(sib19_ta_info->ta_CommonDriftVariant_r17);
+
+  // Currently PositionVelocity is supported and not yet the OrbitalParams
+  if (!scc->ext2->ntn_Config_r17->ephemerisInfo_r17) {
+    scc->ext2->ntn_Config_r17->ephemerisInfo_r17 = calloc(1, sizeof(*scc->ext2->ntn_Config_r17->ephemerisInfo_r17));
+    scc->ext2->ntn_Config_r17->ephemerisInfo_r17->present = NR_EphemerisInfo_r17_PR_NOTHING;
+  }
+  if (scc->ext2->ntn_Config_r17->ephemerisInfo_r17->present == NR_EphemerisInfo_r17_PR_orbital_r17) {
+    ASN_STRUCT_FREE(asn_DEF_NR_Orbital_r17, scc->ext2->ntn_Config_r17->ephemerisInfo_r17->choice.orbital_r17);
+    scc->ext2->ntn_Config_r17->ephemerisInfo_r17->choice.orbital_r17 = NULL;
+    scc->ext2->ntn_Config_r17->ephemerisInfo_r17->present = NR_EphemerisInfo_r17_PR_NOTHING;
+  }
+  if (!scc->ext2->ntn_Config_r17->ephemerisInfo_r17->choice.positionVelocity_r17)
+    scc->ext2->ntn_Config_r17->ephemerisInfo_r17->choice.positionVelocity_r17 =
+        calloc(1, sizeof(*scc->ext2->ntn_Config_r17->ephemerisInfo_r17->choice.positionVelocity_r17));
+
+  scc->ext2->ntn_Config_r17->ephemerisInfo_r17->present = NR_EphemerisInfo_r17_PR_positionVelocity_r17;
+  NR_PositionVelocity_r17_t *sib19_PosVel = scc->ext2->ntn_Config_r17->ephemerisInfo_r17->choice.positionVelocity_r17;
+
+  sib19_PosVel->positionX_r17 = pos->X;
+  sib19_PosVel->positionY_r17 = pos->Y;
+  sib19_PosVel->positionZ_r17 = pos->Z;
+  sib19_PosVel->velocityVX_r17 = vel->X;
+  sib19_PosVel->velocityVY_r17 = vel->Y;
+  sib19_PosVel->velocityVZ_r17 = vel->Z;
+
+  NR_SystemInformation_IEs_t *sysInfov17 = calloc(1, sizeof(*sysInfov17)); // for othersibs
+  struct NR_SystemInformation_IEs__sib_TypeAndInfo__Member *type_du = calloc(1, sizeof(*type_du));
+  type_du->present = NR_SystemInformation_IEs__sib_TypeAndInfo__Member_PR_sib19_v1700;
+  NR_SIB19_r17_t *sib19 = get_SIB19_NR(cc->ServingCellConfigCommon);
+  type_du->choice.sib19_v1700 = sib19;
+  add_sib_to_systeminformation(sysInfov17, type_du);
+
+  cc->other_sib_bcch_length[1] = encode_sysinfo_ie(sysInfov17, cc->other_sib_bcch_pdu[1], sizeof(cc->other_sib_bcch_pdu[1]));
+  AssertFatal(cc->other_sib_bcch_length[1] > 0, "could not encode SIB19\n");
+  ASN_STRUCT_FREE(asn_DEF_NR_SystemInformation_IEs, sysInfov17);
+
+  NR_SCHED_UNLOCK(&nrmac->sched_lock);
+
+  return true;
+}
+
 void prepare_du_configuration_update(gNB_MAC_INST *mac,
                                      f1ap_served_cell_info_t *info,
                                      NR_BCCH_BCH_Message_t *mib,
@@ -950,15 +1025,21 @@ void prepare_du_configuration_update(gNB_MAC_INST *mac,
   /* send gNB-DU configuration update to RRC */
   f1ap_gnb_du_configuration_update_t update = {
     .transaction_id = 1,
-    .num_cells_to_modify = 1,
+    .num_status = 1,
+    .status[0].plmn = info->plmn,
+    .status[0].nr_cellid = info->nr_cellid,
+    .status[0].service_state = F1AP_STATE_IN_SERVICE,
   };
-  update.cell_to_modify[0].old_nr_cellid = info->nr_cellid;
-  update.cell_to_modify[0].info = *info;
-  update.cell_to_modify[0].sys_info = get_sys_info(mib, sib1, NULL);
+  if (mib && sib1) {
+    update.num_cells_to_modify = 1,
+    update.cell_to_modify[0].old_nr_cellid = info->nr_cellid;
+    update.cell_to_modify[0].info = *info;
+    update.cell_to_modify[0].sys_info = get_sys_info(mib, sib1, NULL);
+  }
   mac->mac_rrc.gnb_du_configuration_update(&update);
 }
 
-void nr_mac_configure_sib1(gNB_MAC_INST *nrmac, const f1ap_plmn_t *plmn, uint64_t cellID, int tac)
+void nr_mac_configure_sib1(gNB_MAC_INST *nrmac, const plmn_id_t *plmn, uint64_t cellID, int tac)
 {
   AssertFatal(IS_SA_MODE(get_softmodem_params()), "error: SIB1 only applicable for SA\n");
 
@@ -979,18 +1060,18 @@ bool nr_mac_add_test_ue(gNB_MAC_INST *nrmac, uint32_t rnti, NR_CellGroupConfig_t
   DevAssert(get_softmodem_params()->phy_test);
   NR_SCHED_LOCK(&nrmac->sched_lock);
 
-  NR_UE_info_t *UE = add_new_nr_ue(nrmac, rnti, CellGroup);
-  if (!UE) {
+  NR_UE_info_t *UE = get_new_nr_ue_inst(&nrmac->UE_info.uid_allocator, rnti, CellGroup);
+  DevAssert(UE->uid < MAX_MOBILES_PER_GNB); // test-mode: we assume we can always create a UE
+  free_and_zero(UE->ra); // test-mode (sims, phy-test): UE will not do RA
+  bool res = add_connected_nr_ue(nrmac, UE);
+  if (!res) {
     LOG_E(NR_MAC, "Error adding UE %04x\n", rnti);
+    delete_nr_ue_data(UE, NULL, &nrmac->UE_info.uid_allocator);
     NR_SCHED_UNLOCK(&nrmac->sched_lock);
     return false;
   }
-
-  if (CellGroup->spCellConfig && CellGroup->spCellConfig->reconfigurationWithSync
-      && CellGroup->spCellConfig->reconfigurationWithSync->rach_ConfigDedicated
-      && CellGroup->spCellConfig->reconfigurationWithSync->rach_ConfigDedicated->choice.uplink->cfra) {
-    nr_mac_prepare_ra_ue(RC.nrmac[0], UE->rnti, CellGroup);
-  }
+  int ss_type = NR_SearchSpace__searchSpaceType_PR_ue_Specific;
+  configure_UE_BWP(nrmac, nrmac->common_channels[0].ServingCellConfigCommon, UE, false, ss_type, -1, -1);
   process_addmod_bearers_cellGroupConfig(&UE->UE_sched_ctrl, CellGroup->rlc_BearerToAddModList);
   AssertFatal(CellGroup->rlc_BearerToReleaseList == NULL, "cannot release bearers while adding new UEs\n");
   NR_SCHED_UNLOCK(&nrmac->sched_lock);
@@ -998,32 +1079,18 @@ bool nr_mac_add_test_ue(gNB_MAC_INST *nrmac, uint32_t rnti, NR_CellGroupConfig_t
   return true;
 }
 
-bool nr_mac_prepare_ra_ue(gNB_MAC_INST *nrmac, uint32_t rnti, NR_CellGroupConfig_t *CellGroup)
+void nr_mac_prepare_ra_ue(gNB_MAC_INST *nrmac, NR_UE_info_t *UE)
 {
   DevAssert(nrmac != NULL);
-  DevAssert(CellGroup != NULL);
   NR_SCHED_ENSURE_LOCKED(&nrmac->sched_lock);
-
-  // NSA case: need to pre-configure CFRA
-  const int CC_id = 0;
-  NR_COMMON_channels_t *cc = &nrmac->common_channels[CC_id];
-  uint8_t ra_index = 0;
-  /* checking for free RA process */
-  for(; ra_index < NR_NB_RA_PROC_MAX; ra_index++) {
-    if ((cc->ra[ra_index].ra_state == nrRA_gNB_IDLE) && (!cc->ra[ra_index].cfra))
-      break;
-  }
-  if (ra_index == NR_NB_RA_PROC_MAX) {
-    LOG_E(NR_MAC, "RA processes are not available for CFRA RNTI %04x\n", rnti);
-    return false;
-  }
-  NR_RA_t *ra = &cc->ra[ra_index];
+  NR_RA_t *ra = UE->ra;
   ra->cfra = true;
-  ra->rnti = rnti;
-  ra->CellGroup = CellGroup;
+  NR_CellGroupConfig_t *CellGroup = UE->CellGroup;
+  DevAssert(CellGroup != NULL);
   struct NR_CFRA *cfra = CellGroup->spCellConfig->reconfigurationWithSync->rach_ConfigDedicated->choice.uplink->cfra;
   uint8_t num_preamble = cfra->resources.choice.ssb->ssb_ResourceList.list.count;
   ra->preambles.num_preambles = num_preamble;
+  NR_COMMON_channels_t *cc = &nrmac->common_channels[0];
   for (int i = 0; i < cc->num_active_ssb; i++) {
     for (int j = 0; j < num_preamble; j++) {
       if (cc->ssb_index[i] == cfra->resources.choice.ssb->ssb_ResourceList.list.array[j]->ssb) {
@@ -1033,27 +1100,5 @@ bool nr_mac_prepare_ra_ue(gNB_MAC_INST *nrmac, uint32_t rnti, NR_CellGroupConfig
       }
     }
   }
-  LOG_I(NR_MAC, "Added new %s process for UE RNTI %04x with initial CellGroup\n", ra->cfra ? "CFRA" : "CBRA", rnti);
-  return true;
-}
-
-/* Prepare a new CellGroupConfig to be applied for this UE. We cannot
- * immediatly apply it, as we have to wait for the reconfiguration through RRC.
- * This function sets up everything to apply the reconfiguration. Later, we
- * will trigger the UE inactivity with nr_mac_interrupt_ue_transmission(); upon
- * expiry, nr_mac_apply_cellgroup() will apply the CellGroupConfig (radio
- * config etc). */
-bool nr_mac_prepare_cellgroup_update(gNB_MAC_INST *nrmac, NR_UE_info_t *UE, NR_CellGroupConfig_t *CellGroup)
-{
-  DevAssert(nrmac != NULL);
-  DevAssert(UE != NULL);
-  DevAssert(CellGroup != NULL);
-
-  /* we assume that this function is mutex-protected from outside */
-  NR_SCHED_ENSURE_LOCKED(&nrmac->sched_lock);
-
-  UE->reconfigCellGroup = CellGroup;
-  UE->expect_reconfiguration = true;
-
-  return true;
+  LOG_I(NR_MAC, "Added new %s process for UE RNTI %04x with initial CellGroup\n", ra->cfra ? "CFRA" : "CBRA", UE->rnti);
 }

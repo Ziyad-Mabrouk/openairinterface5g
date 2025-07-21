@@ -1818,8 +1818,8 @@ rrc_ue_process_ueCapabilityEnquiry(
   ul_dcch_msg.message.choice.c1.choice.ueCapabilityInformation.rrc_TransactionIdentifier = UECapabilityEnquiry->rrc_TransactionIdentifier;
   ue_CapabilityRAT_Container.rat_Type = LTE_RAT_Type_eutra;
   OCTET_STRING_fromBuf(&ue_CapabilityRAT_Container.ueCapabilityRAT_Container,
-                       (const char *)UE_rrc_inst[ctxt_pP->module_id].UECapability,
-                       UE_rrc_inst[ctxt_pP->module_id].UECapability_size);
+                       (const char *)UE_rrc_inst[ctxt_pP->module_id].UECap->sdu,
+                       UE_rrc_inst[ctxt_pP->module_id].UECap->sdu_size);
   //  ue_CapabilityRAT_Container.ueCapabilityRAT_Container.buf  = UE_rrc_inst[ue_mod_idP].UECapability;
   // ue_CapabilityRAT_Container.ueCapabilityRAT_Container.size = UE_rrc_inst[ue_mod_idP].UECapability_size;
   AssertFatal(UECapabilityEnquiry->criticalExtensions.present == LTE_UECapabilityEnquiry__criticalExtensions_PR_c1,
@@ -6582,15 +6582,11 @@ void process_nr_nsa_msg(nsa_msg_t *msg, int msg_len)
             }
 
             nfapi_nr_dl_tti_request_t dl_tti_request;
-            int unpack_len = nfapi_nr_p7_message_unpack((void *)msg_buffer,
-                                                         msg_len,
-                                                         &dl_tti_request,
-                                                         sizeof(nfapi_nr_dl_tti_request_t),
-                                                         NULL);
-            if (unpack_len < 0)
-            {
-                LOG_E(RRC, "%s: SSB PDU unpack failed \n", __FUNCTION__);
-                break;
+            const bool result =
+                nfapi_nr_p7_message_unpack((void *)msg_buffer, msg_len, &dl_tti_request, sizeof(nfapi_nr_dl_tti_request_t), NULL);
+            if (!result) {
+              LOG_E(RRC, "%s: SSB PDU unpack failed \n", __FUNCTION__);
+              break;
             }
             int num_pdus = dl_tti_request.dl_tti_request_body.nPDUs;
             if (num_pdus <= 0)

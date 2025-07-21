@@ -41,7 +41,6 @@ import constants as CONST
 import cls_oaicitest		 #main class for OAI CI test framework
 import cls_containerize	 #class Containerize for all container-based operations on RAN/UE objects
 import cls_static_code_analysis  #class for static code analysis
-import cls_physim1		 #class PhySim for physical simulators deploy and run
 import cls_cluster		 # class for building/deploying on cluster
 import cls_native        # class for all native/source-based operations
 
@@ -97,7 +96,6 @@ def ExecuteActionWithParam(action):
 	global HTML
 	global CONTAINERS
 	global SCA
-	global PHYSIM
 	global CLUSTER
 	if action == 'Build_eNB' or action == 'Build_Image' or action == 'Build_Proxy' or action == "Build_Cluster_Image" or action == "Build_Run_Tests":
 		RAN.Build_eNB_args=test.findtext('Build_eNB_args')
@@ -295,7 +293,9 @@ def ExecuteActionWithParam(action):
 		success = cls_oaicitest.IdleSleep(HTML, int(st))
 
 	elif action == 'Deploy_Run_PhySim':
-		success = PHYSIM.Deploy_PhySim(HTML)
+		oc_release = test.findtext('oc_release')
+		svr_id = test.findtext('svr_id') or None
+		success = CLUSTER.deploy_oc_physim(HTML, oc_release, svr_id)
 
 	elif action == 'DeployCoreNetwork' or action == 'UndeployCoreNetwork':
 		cn_id = test.findtext('cn_id')
@@ -376,14 +376,12 @@ def ExecuteActionWithParam(action):
 			# Change all execution targets to localhost
 			node = 'localhost'
 		command = test.findtext('command')
-		command_fail = test.findtext('command_fail') in ['True', 'true', 'Yes', 'yes']
-		success = cls_oaicitest.Custom_Command(HTML, node, command, command_fail)
+		success = cls_oaicitest.Custom_Command(HTML, node, command)
 
 	elif action == 'Custom_Script':
 		node = test.findtext('node')
 		script = test.findtext('script')
-		command_fail = test.findtext('command_fail') in ['True', 'true', 'Yes', 'yes']
-		success = cls_oaicitest.Custom_Script(HTML, node, script, command_fail)
+		success = cls_oaicitest.Custom_Script(HTML, node, script)
 
 	elif action == 'Pull_Cluster_Image':
 		tag_prefix = test.findtext('tag_prefix') or ""
@@ -442,7 +440,6 @@ RAN = ran.RANManagement()
 HTML = cls_oai_html.HTMLManagement()
 CONTAINERS = cls_containerize.Containerize()
 SCA = cls_static_code_analysis.StaticCodeAnalysis()
-PHYSIM = cls_physim1.PhySim()
 CLUSTER = cls_cluster.Cluster()
 
 #-----------------------------------------------------------
@@ -452,7 +449,7 @@ CLUSTER = cls_cluster.Cluster()
 import args_parse
 # Force local execution, move all execution targets to localhost
 force_local = False
-py_param_file_present, py_params, mode, force_local = args_parse.ArgsParse(sys.argv,CiTestObj,RAN,HTML,CONTAINERS,HELP,SCA,PHYSIM,CLUSTER)
+py_param_file_present, py_params, mode, force_local = args_parse.ArgsParse(sys.argv,CiTestObj,RAN,HTML,CONTAINERS,HELP,SCA,CLUSTER)
 
 
 
@@ -485,9 +482,9 @@ elif re.match('^TerminateMME$', mode, re.IGNORECASE):
 elif re.match('^TerminateSPGW$', mode, re.IGNORECASE):
 	logging.warning("Option TerminateSPGW ignored")
 elif re.match('^LogCollectBuild$', mode, re.IGNORECASE):
-	if (RAN.eNBIPAddress == '' or RAN.eNBUserName == '' or RAN.eNBPassword == '' or RAN.eNBSourceCodePath == '') and (CiTestObj.UEIPAddress == '' or CiTestObj.UEUserName == '' or CiTestObj.UEPassword == '' or CiTestObj.UESourceCodePath == ''):
-		HELP.GenericHelp(CONST.Version)
-		sys.exit('Insufficient Parameter')
+	if RAN.eNBIPAddress == '' or RAN.eNBUserName == '' or RAN.eNBPassword == '' or RAN.eNBSourceCodePath == '':
+		logging.warning("nothing to collect (eNBIPAddress/eNBUserName/eNBPassword/eNBSourceCodePath is '')")
+		sys.exit(0)
 	if RAN.eNBIPAddress == 'none':
 		sys.exit(0)
 	CiTestObj.LogCollectBuild(RAN)
@@ -557,7 +554,7 @@ elif re.match('^TesteNB$', mode, re.IGNORECASE) or re.match('^TestUE$', mode, re
 				HELP.eNBSrvHelp(RAN.eNBIPAddress, RAN.eNBUserName, RAN.eNBPassword, RAN.eNBSourceCodePath)
 			sys.exit('Insufficient Parameter')
 	else:
-		if CiTestObj.UEIPAddress == '' or CiTestObj.ranRepository == '' or CiTestObj.ranBranch == '' or CiTestObj.UEUserName == '' or CiTestObj.UEPassword == '' or CiTestObj.UESourceCodePath == '':
+		if CiTestObj.ranRepository == '' or CiTestObj.ranBranch == '':
 			HELP.GenericHelp(CONST.Version)
 			sys.exit('UE: Insufficient Parameter')
 
@@ -627,6 +624,7 @@ elif re.match('^TesteNB$', mode, re.IGNORECASE) or re.match('^TestUE$', mode, re
 			HTML.testCase_id=CiTestObj.testCase_id
 			CiTestObj.desc = test.findtext('desc')
 			always_exec = test.findtext('always_exec') in ['True', 'true', 'Yes', 'yes']
+			may_fail = test.findtext('may_fail') in ['True', 'true', 'Yes', 'yes']
 			HTML.desc=CiTestObj.desc
 			action = test.findtext('class')
 			if (CheckClassValidity(xml_class_list, action, id) == False):
@@ -640,7 +638,9 @@ elif re.match('^TesteNB$', mode, re.IGNORECASE) or re.match('^TestUE$', mode, re
 				break
 			try:
 				test_succeeded = ExecuteActionWithParam(action)
-				if not test_succeeded:
+				if not test_succeeded and may_fail:
+					logging.warning(f"test ID {test_case_id} action {action} may or may not fail, proceeding despite error")
+				elif not test_succeeded:
 					logging.error(f"test ID {test_case_id} action {action} failed ({test_succeeded}), skipping next tests")
 					task_set_succeeded = False
 			except Exception as e:

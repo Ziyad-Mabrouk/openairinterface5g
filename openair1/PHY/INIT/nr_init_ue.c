@@ -180,8 +180,10 @@ int init_nr_ue_signal(PHY_VARS_NR_UE *ue, int nb_connected_gNB)
   AssertFatal( nb_connected_gNB <= NUMBER_OF_CONNECTED_gNB_MAX, "n_connected_gNB is too large" );
   // init phy_vars_ue
 
-  for (int i = 0; i < fp->Lmax; i++)
+  for (int i = 0; i < fp->Lmax; i++) {
     ue->measurements.ssb_rsrp_dBm[i] = INT_MIN;
+    ue->measurements.ssb_sinr_dB[i] = INT_MIN;
+  }
 
   for (int i = 0; i < 4; i++) {
     ue->rx_gain_max[i] = 135;
@@ -259,9 +261,10 @@ int init_nr_ue_signal(PHY_VARS_NR_UE *ue, int nb_connected_gNB)
 
     // ceil((NB_RB*8(max allocation per RB)*2(QPSK))/32)
     ue->nr_csi_info = malloc16_clear(sizeof(nr_csi_info_t));
-    ue->nr_csi_info->csi_rs_generated_signal = malloc16(NR_MAX_NB_PORTS * sizeof(int32_t *));
+    ue->nr_csi_info->csi_rs_generated_signal = malloc16(NR_MAX_NB_PORTS * sizeof(*ue->nr_csi_info->csi_rs_generated_signal));
     for (int i = 0; i < NR_MAX_NB_PORTS; i++) {
-      ue->nr_csi_info->csi_rs_generated_signal[i] = malloc16_clear(fp->samples_per_frame_wCP * sizeof(int32_t));
+      ue->nr_csi_info->csi_rs_generated_signal[i] =
+          malloc16_clear(fp->samples_per_frame_wCP * sizeof(**ue->nr_csi_info->csi_rs_generated_signal));
     }
 
     ue->nr_srs_info = malloc16_clear(sizeof(nr_srs_info_t));

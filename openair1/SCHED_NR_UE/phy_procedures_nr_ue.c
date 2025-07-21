@@ -81,6 +81,8 @@ static const unsigned int gain_table[31] = {100,  112,  126,  141,  158,  178,  
                                             359,  398,  447,  501,  562,  631,  708,  794,  891, 1000, 1122,
                                             1258, 1412, 1585, 1778, 1995, 2239, 2512, 2818, 3162};
 
+static void nr_ue_prach_procedures(PHY_VARS_NR_UE *ue, const UE_nr_rxtx_proc_t *proc, c16_t **txData);
+
 void nr_fill_dl_indication(nr_downlink_indication_t *dl_ind,
                            fapi_nr_dci_indication_t *dci_ind,
                            fapi_nr_rx_indication_t *rx_ind,
@@ -175,6 +177,7 @@ void nr_fill_rx_indication(fapi_nr_rx_indication_t *rx_ind,
         rx->ssb_pdu.cell_id = frame_parms->Nid_cell;
         rx->ssb_pdu.ssb_start_subcarrier = frame_parms->ssb_start_subcarrier;
         rx->ssb_pdu.rsrp_dBm = ue->measurements.ssb_rsrp_dBm[frame_parms->ssb_index];
+        rx->ssb_pdu.sinr_dB = ue->measurements.ssb_sinr_dB[frame_parms->ssb_index];
         rx->ssb_pdu.arfcn = get_ssb_arfcn(frame_parms);
         rx->ssb_pdu.radiolink_monitoring = RLM_in_sync; // TODO to be removed from here
         rx->ssb_pdu.decoded_pdu = true;
@@ -267,7 +270,7 @@ void ue_ta_procedures(PHY_VARS_NR_UE *ue, int slot_tx, int frame_tx)
   }
 }
 
-void phy_procedures_nrUE_TX(PHY_VARS_NR_UE *ue, const UE_nr_rxtx_proc_t *proc, nr_phy_data_tx_t *phy_data)
+void phy_procedures_nrUE_TX(PHY_VARS_NR_UE *ue, const UE_nr_rxtx_proc_t *proc, nr_phy_data_tx_t *phy_data, c16_t **txp)
 {
   const int slot_tx = proc->nr_slot_tx;
   const int frame_tx = proc->frame_tx;
@@ -305,12 +308,13 @@ void phy_procedures_nrUE_TX(PHY_VARS_NR_UE *ue, const UE_nr_rxtx_proc_t *proc, n
                                   &ue->frame_parms,
                                   ue->frame_parms.nb_antennas_tx,
                                   (c16_t **)txdataF,
+                                  txp,
                                   link_type_ul,
                                   was_symbol_used);
     stop_meas_nr_ue_phy(ue, OFDM_MOD_STATS);
   }
 
-  nr_ue_prach_procedures(ue, proc);
+  nr_ue_prach_procedures(ue, proc, txp);
 
   LOG_D(PHY, "****** end TX-Chain for AbsSubframe %d.%d ******\n", proc->frame_tx, proc->nr_slot_tx);
 
@@ -485,6 +489,7 @@ static int nr_ue_pdsch_procedures(PHY_VARS_NR_UE *ue,
                                   c16_t rxdataF[][ue->frame_parms.samples_per_slot_wCP],
                                   int G)
 {
+  int frame_rx = proc->frame_rx;
   int nr_slot_rx = proc->nr_slot_rx;
 
   // We handle only one CW now
@@ -496,9 +501,10 @@ static int nr_ue_pdsch_procedures(PHY_VARS_NR_UE *ue,
     NR_DL_UE_HARQ_t *dlsch0_harq = &ue->dl_harq_processes[0][harq_pid];
 
     LOG_D(PHY,
-          "[UE %d] nr_slot_rx %d, harq_pid %d (%d), BWP start %d, rb_start %d, nb_rb %d, symbol_start %d, nb_symbols %d, DMRS mask "
+          "[UE %d] frame_rx %d, nr_slot_rx %d, harq_pid %d (%d), BWP start %d, rb_start %d, nb_rb %d, symbol_start %d, nb_symbols %d, DMRS mask "
           "%x, Nl %d\n",
           ue->Mod_id,
+          frame_rx,
           nr_slot_rx,
           harq_pid,
           dlsch0_harq->status,
@@ -558,10 +564,9 @@ static int nr_ue_pdsch_procedures(PHY_VARS_NR_UE *ue,
           nvar += nvar_tmp;
 #if 0
           ///LOG_M: the channel estimation
-          int nr_frame_rx = proc->frame_rx;
           char filename[100];
           for (uint8_t aarx=0; aarx<ue->frame_parms.nb_antennas_rx; aarx++) {
-            sprintf(filename,"PDSCH_CHANNEL_frame%d_slot%d_sym%d_port%d_rx%d.m", nr_frame_rx, nr_slot_rx, m, nl, aarx);
+            sprintf(filename,"PDSCH_CHANNEL_frame%d_slot%d_sym%d_port%d_rx%d.m", frame_rx, nr_slot_rx, m, nl, aarx);
             int **dl_ch_estimates = ue->pdsch_vars[gNB_id]->dl_ch_estimates;
             LOG_M(filename,"channel_F",&dl_ch_estimates[nl*ue->frame_parms.nb_antennas_rx+aarx][ue->frame_parms.ofdm_symbol_size*m],ue->frame_parms.ofdm_symbol_size, 1, 1);
           }
@@ -601,6 +606,24 @@ static int nr_ue_pdsch_procedures(PHY_VARS_NR_UE *ue,
 
     int32_t log2_maxh = 0;
     start_meas_nr_ue_phy(ue, RX_PDSCH_STATS);
+    pdsch_scope_req_t scope_req = { .copy_chanest_to_scope = false,
+                                    .copy_rxdataF_to_scope = false,
+                                    .scope_rxdataF_offset = 0 };
+    if (UEScopeHasTryLock(ue)) {
+      metadata mt = {.frame = proc->frame_rx, .slot = proc->nr_slot_rx};
+      scope_req.copy_chanest_to_scope = UETryLockScopeData(ue,
+                                                           pdschChanEstimates,
+                                                           sizeof(c16_t),
+                                                           1,
+                                                           dlschCfg->number_rbs * NR_NB_SC_PER_RB * dlschCfg->number_symbols,
+                                                           &mt);
+      scope_req.copy_rxdataF_to_scope = UETryLockScopeData(ue,
+                                                           pdschRxdataF,
+                                                           sizeof(c16_t),
+                                                           1,
+                                                           dlschCfg->number_rbs * NR_NB_SC_PER_RB * dlschCfg->number_symbols,
+                                                           &mt);
+    }
     for (int m = dlschCfg->start_symbol; m < (dlschCfg->number_symbols + dlschCfg->start_symbol); m++) {
       bool first_symbol_flag = false;
       if (m == first_symbol_with_data)
@@ -627,11 +650,25 @@ static int nr_ue_pdsch_procedures(PHY_VARS_NR_UE *ue,
                       ptrs_phase_per_slot,
                       ptrs_re_per_slot,
                       G,
-                      nvar)
-          < 0)
+                      nvar,
+                      &scope_req)
+          < 0) {
+        if (scope_req.copy_chanest_to_scope) {
+          UEunlockScopeData(ue, pdschChanEstimates);
+        }
+        if (scope_req.copy_rxdataF_to_scope) {
+          UEunlockScopeData(ue, pdschRxdataF);
+        }
         return -1;
+      }
     } // CRNTI active
     stop_meas_nr_ue_phy(ue, RX_PDSCH_STATS);
+    if (scope_req.copy_chanest_to_scope) {
+      UEunlockScopeData(ue, pdschChanEstimates);
+    }
+    if (scope_req.copy_rxdataF_to_scope) {
+      UEunlockScopeData(ue, pdschRxdataF);
+    }
     free(toFree);
     free(toFree2);
   }
@@ -729,9 +766,11 @@ static void nr_ue_dlsch_procedures(PHY_VARS_NR_UE *ue,
   if (is_cw0_active != ACTIVE && is_cw1_active != ACTIVE) {
     // don't wait anymore
     LOG_E(NR_PHY, "Internal error  nr_ue_dlsch_procedure() called but no active cw on slot %d, harq %d\n", nr_slot_rx, harq_pid);
-    const int ack_nack_slot_and_frame =
-        (proc->nr_slot_rx + dlsch[0].dlsch_config.k1_feedback) + proc->frame_rx * ue->frame_parms.slots_per_frame;
-    dynamic_barrier_join(&ue->process_slot_tx_barriers[ack_nack_slot_and_frame % NUM_PROCESS_SLOT_TX_BARRIERS]);
+    if (dlsch[0].dlsch_config.k1_feedback) {
+      const int ack_nack_slot_and_frame =
+          (proc->nr_slot_rx + dlsch[0].dlsch_config.k1_feedback) + proc->frame_rx * ue->frame_parms.slots_per_frame;
+      dynamic_barrier_join(&ue->process_slot_tx_barriers[ack_nack_slot_and_frame % NUM_PROCESS_SLOT_TX_BARRIERS]);
+    }
     return;
   }
 
@@ -808,7 +847,7 @@ static void nr_ue_dlsch_procedures(PHY_VARS_NR_UE *ue,
   }
 
   // DLSCH decoding finished! don't wait anymore in Tx process, we know if we should answer ACK/NACK PUCCH
-  if (dlsch[0].rnti_type == TYPE_C_RNTI_) {
+  if ((dlsch[0].rnti_type == TYPE_C_RNTI_ || dlsch[0].rnti_type == TYPE_RA_RNTI_) && dlsch[0].dlsch_config.k1_feedback) {
     const int ack_nack_slot_and_frame =
         (proc->nr_slot_rx + dlsch[0].dlsch_config.k1_feedback) + proc->frame_rx * ue->frame_parms.slots_per_frame;
     dynamic_barrier_join(&ue->process_slot_tx_barriers[ack_nack_slot_and_frame % NUM_PROCESS_SLOT_TX_BARRIERS]);
@@ -973,7 +1012,9 @@ int pbch_pdcch_processing(PHY_VARS_NR_UE *ue, const UE_nr_rxtx_proc_t *proc, nr_
   VCD_SIGNAL_DUMPER_DUMP_FUNCTION_BY_NAME(VCD_SIGNAL_DUMPER_FUNCTIONS_UE_SLOT_FEP_PDCCH, VCD_FUNCTION_IN);
 
   uint8_t nb_symb_pdcch = phy_pdcch_config->nb_search_space > 0 ? phy_pdcch_config->pdcch_config[0].coreset.duration : 0;
-  for (uint16_t l=0; l<nb_symb_pdcch; l++) {
+  int first_symb_pdcch = phy_pdcch_config->nb_search_space > 0 ? phy_pdcch_config->pdcch_config[0].coreset.StartSymbolIndex : 0;
+  int last_symb_pdcch = first_symb_pdcch + nb_symb_pdcch;
+  for (int l = first_symb_pdcch; l < last_symb_pdcch; l++) {
     nr_slot_fep(ue, fp, proc->nr_slot_rx, l, rxdataF, link_type_dl, 0, ue->common_vars.rxdata);
   }
 
@@ -983,10 +1024,8 @@ int pbch_pdcch_processing(PHY_VARS_NR_UE *ue, const UE_nr_rxtx_proc_t *proc, nr_
 
   uint8_t dci_cnt = 0;
   for(int n_ss = 0; n_ss<phy_pdcch_config->nb_search_space; n_ss++) {
-    for (uint16_t l=0; l<nb_symb_pdcch; l++) {
-
+    for (int l = first_symb_pdcch; l < last_symb_pdcch; l++) {
       // note: this only works if RBs for PDCCH are contigous!
-
       nr_pdcch_channel_estimation(ue,
                                   proc,
                                   l,
@@ -996,7 +1035,6 @@ int pbch_pdcch_processing(PHY_VARS_NR_UE *ue, const UE_nr_rxtx_proc_t *proc, nr_
                                   pdcch_est_size,
                                   pdcch_dl_ch_estimates,
                                   rxdataF);
-
     }
     dci_cnt = dci_cnt + nr_ue_pdcch_procedures(ue, proc, pdcch_est_size, pdcch_dl_ch_estimates, phy_data, n_ss, rxdataF);
   }
@@ -1114,9 +1152,11 @@ void pdsch_processing(PHY_VARS_NR_UE *ue, const UE_nr_rxtx_proc_t *proc, nr_phy_
     }
     else {
       LOG_E(NR_PHY, "Demodulation impossible, internal error\n");
-      const int ack_nack_slot_and_frame =
-          proc->nr_slot_rx + dlsch_config->k1_feedback + proc->frame_rx * ue->frame_parms.slots_per_frame;
-      dynamic_barrier_join(&ue->process_slot_tx_barriers[ack_nack_slot_and_frame % NUM_PROCESS_SLOT_TX_BARRIERS]);
+      if (dlsch_config->k1_feedback) {
+        const int ack_nack_slot_and_frame =
+            proc->nr_slot_rx + dlsch_config->k1_feedback + proc->frame_rx * ue->frame_parms.slots_per_frame;
+        dynamic_barrier_join(&ue->process_slot_tx_barriers[ack_nack_slot_and_frame % NUM_PROCESS_SLOT_TX_BARRIERS]);
+      }
       LOG_W(NR_PHY, "nr_ue_pdsch_procedures failed in slot %d\n", proc->nr_slot_rx);
     }
 
@@ -1173,7 +1213,7 @@ void pdsch_processing(PHY_VARS_NR_UE *ue, const UE_nr_rxtx_proc_t *proc, nr_phy_
 
 // todo:
 // - power control as per 38.213 ch 7.4
-void nr_ue_prach_procedures(PHY_VARS_NR_UE *ue, const UE_nr_rxtx_proc_t *proc)
+static void nr_ue_prach_procedures(PHY_VARS_NR_UE *ue, const UE_nr_rxtx_proc_t *proc, c16_t **txData)
 {
   int gNB_id = proc->gNB_id;
   int frame_tx = proc->frame_tx, nr_slot_tx = proc->nr_slot_tx, prach_power; // tx_amp
@@ -1202,7 +1242,7 @@ void nr_ue_prach_procedures(PHY_VARS_NR_UE *ue, const UE_nr_rxtx_proc_t *proc)
       VCD_SIGNAL_DUMPER_DUMP_FUNCTION_BY_NAME(VCD_SIGNAL_DUMPER_FUNCTIONS_UE_GENERATE_PRACH, VCD_FUNCTION_IN);
 
       start_meas_nr_ue_phy(ue, PRACH_GEN_STATS);
-      prach_power = generate_nr_prach(ue, gNB_id, frame_tx, nr_slot_tx);
+      prach_power = generate_nr_prach(ue, gNB_id, frame_tx, nr_slot_tx, txData);
       stop_meas_nr_ue_phy(ue, PRACH_GEN_STATS);
       if (cpumeas(CPUMEAS_GETSTATE)) {
         LOG_D(PHY,

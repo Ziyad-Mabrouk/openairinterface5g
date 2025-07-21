@@ -5,6 +5,7 @@
 
 # define GTPU_HEADER_OVERHEAD_MAX 64
 
+#include "openair2/COMMON/gtpv1_u_messages_types.h"
 #include "common/utils/hashtable/hashtable.h"
 #ifdef __cplusplus
 extern "C" {
@@ -102,7 +103,7 @@ extern "C" {
 
   int newGtpuDeleteOneTunnel(instance_t instance, ue_id_t ue_id, int rb_id);
   int newGtpuDeleteAllTunnels(instance_t instance, ue_id_t ue_id);
-  int newGtpuDeleteTunnels(instance_t instance, ue_id_t ue_id, int nbTunnels, pdusessionid_t *pdusession_id);
+  int newGtpuDeleteTunnels(instance_t instance, ue_id_t ue_id, int nbTunnels, int *pdusession_id);
 
   void gtpv1uSendDirect(instance_t instance, ue_id_t ue_id, int bearer_id, uint8_t *buf, size_t len, bool seqNumFlag, bool npduNumFlag);
 

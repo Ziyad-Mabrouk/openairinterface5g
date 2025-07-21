@@ -41,6 +41,13 @@
 #define NR_PUSCH_x 2 // UCI placeholder bit TS 38.212 V15.4.0 subclause 5.3.3.1
 #define NR_PUSCH_y 3 // UCI placeholder bit
 
+// Specifies the data that should be copied to the scope during PDSCH RX
+typedef struct pdsch_scope_req_s {
+  bool copy_chanest_to_scope;
+  bool copy_rxdataF_to_scope;
+  size_t scope_rxdataF_offset;
+} pdsch_scope_req_t;
+
 // Functions below implement 36-211 and 36-212
 
 /** @addtogroup _PHY_TRANSPORT_
@@ -59,11 +66,7 @@ void nr_dlsch_deinterleaving(uint8_t symbol,
                              uint16_t *llr_deint,
                              uint16_t nb_rb_pdsch);
 
-void nr_conjch0_mult_ch1(int *ch0,
-                         int *ch1,
-                         int32_t *ch0conj_ch1,
-                         unsigned short nb_rb,
-                         unsigned char output_shift0);
+void nr_conjch0_mult_ch1(c16_t *ch0, c16_t *ch1, c16_t *ch0conj_ch1, unsigned short nb_rb, unsigned char output_shift0);
 
 /** \brief This is the alternative top-level entry point for DLSCH decoding in UE.
     It handles all the HARQ processes in only one call. The routine first
@@ -155,6 +158,7 @@ uint8_t nr_ue_pusch_common_procedures(PHY_VARS_NR_UE *UE,
                                       const NR_DL_FRAME_PARMS *frame_parms,
                                       const uint8_t n_antenna_ports,
                                       c16_t **txdataF,
+                                      c16_t **txdata,
                                       uint32_t linktype,
                                       bool was_symbol_used[NR_NUMBER_OF_SYMBOLS_PER_SLOT]);
 
@@ -317,9 +321,10 @@ int nr_rx_pdsch(PHY_VARS_NR_UE *ue,
                 c16_t ptrs_phase_per_slot[][NR_SYMBOLS_PER_SLOT],
                 int32_t ptrs_re_per_slot[][NR_SYMBOLS_PER_SLOT],
                 int G,
-                uint32_t nvar);
+                uint32_t nvar,
+                pdsch_scope_req_t *scope_req);
 
-int32_t generate_nr_prach(PHY_VARS_NR_UE *ue, uint8_t gNB_id, int frame, uint8_t slot);
+int32_t generate_nr_prach(PHY_VARS_NR_UE *ue, uint8_t gNB_id, int frame, uint8_t slot, c16_t **txData);
 
 void dump_nrdlsch(PHY_VARS_NR_UE *ue,uint8_t gNB_id,uint8_t nr_slot_rx,unsigned int *coded_bits_per_codeword,int round,  unsigned char harq_pid);
 void nr_a_sum_b(c16_t *input_x, c16_t *input_y, unsigned short nb_rb);

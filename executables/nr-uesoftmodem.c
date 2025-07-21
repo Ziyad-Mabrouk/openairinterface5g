@@ -49,7 +49,6 @@
 #include "PHY/NR_TRANSPORT/nr_dlsch.h"
 //#include "../../SIMU/USER/init_lte.h"
 
-#include "RRC/LTE/rrc_vars.h"
 #include "PHY_INTERFACE/phy_interface_vars.h"
 #include "NR_IF_Module.h"
 #include "openair1/SIMULATION/TOOLS/sim.h"
@@ -60,10 +59,10 @@
 unsigned short config_frames[4] = {2,9,11,13};
 #endif
 #include "common/utils/LOG/log.h"
+#include "common/utils/time_manager/time_manager.h"
 #include "common/utils/LOG/vcd_signal_dumper.h"
 
 #include "UTIL/OPT/opt.h"
-#include "enb_config.h"
 #include "LAYER2/nr_pdcp/nr_pdcp_oai_api.h"
 
 #include "intertask_interface.h"
@@ -89,7 +88,6 @@ unsigned short config_frames[4] = {2,9,11,13};
 #include "nr_nas_msg.h"
 #include <openair1/PHY/MODULATION/nr_modulation.h>
 #include "openair2/GNB_APP/gnb_paramdef.h"
-#include "pdcp.h"
 #include "actor.h"
 
 THREAD_STRUCT thread_struct;
@@ -172,8 +170,12 @@ void exit_function(const char *file, const char *function, const int line, const
 
   if (PHY_vars_UE_g && PHY_vars_UE_g[0]) {
     for(CC_id=0; CC_id<MAX_NUM_CCs; CC_id++) {
-      if (PHY_vars_UE_g[0][CC_id] && PHY_vars_UE_g[0][CC_id]->rfdevice.trx_end_func)
+      if (PHY_vars_UE_g[0][CC_id] && PHY_vars_UE_g[0][CC_id]->rfdevice.trx_end_func) {
+        if (PHY_vars_UE_g[0][CC_id]->rfdevice.trx_get_stats_func) {
+          PHY_vars_UE_g[0][CC_id]->rfdevice.trx_get_stats_func(&PHY_vars_UE_g[0][CC_id]->rfdevice);
+        }
         PHY_vars_UE_g[0][CC_id]->rfdevice.trx_end_func(&PHY_vars_UE_g[0][CC_id]->rfdevice);
+      }
     }
   }
 
@@ -199,11 +201,15 @@ nrUE_params_t *get_nrUE_params(void) {
 }
 static void get_options(configmodule_interface_t *cfg)
 {
-  paramdef_t cmdline_params[] =CMDLINE_NRUEPARAMS_DESC ;
+  paramdef_t cmdline_params[] = CMDLINE_NRUEPARAMS_DESC;
   int numparams = sizeofArray(cmdline_params);
   config_get(cfg, cmdline_params, numparams, NULL);
   if (nrUE_params.vcdflag > 0)
     ouput_vcd = 1;
+  AssertFatal(nrUE_params.extra_pdu_id != get_softmodem_params()->default_pdu_session_id,
+              "Default PDU ID (%d) and Extra PDU ID (%d) must be different!\n",
+              get_softmodem_params()->default_pdu_session_id,
+              nrUE_params.extra_pdu_id);
 }
 
 // set PHY vars from command line
@@ -301,25 +307,10 @@ void init_openair0()
 
 static void init_pdcp(int ue_id)
 {
-  uint32_t pdcp_initmask = (!IS_SOFTMODEM_NOS1) ? LINK_ENB_PDCP_TO_GTPV1U_BIT : LINK_ENB_PDCP_TO_GTPV1U_BIT;
-
-  /*if (IS_SOFTMODEM_RFSIM || (nfapi_getmode()==NFAPI_UE_STUB_PNF)) {
-    pdcp_initmask = pdcp_initmask | UE_NAS_USE_TUN_BIT;
-  }*/
-
-  // previous code was:
-  //   if (IS_SOFTMODEM_NOKRNMOD)
-  //     pdcp_initmask = pdcp_initmask | UE_NAS_USE_TUN_BIT;
-  // The kernel module (KRNMOD) has been removed from the project, so the 'if'
-  // was removed but the flag 'pdcp_initmask' was kept, as "no kernel module"
-  // was always set. further refactoring could take it out
-  pdcp_initmask = pdcp_initmask | UE_NAS_USE_TUN_BIT;
-
-  if (get_softmodem_params()->nsa && nr_rlc_module_init(0) != 0) {
+  if (get_softmodem_params()->nsa && nr_rlc_module_init(NR_RLC_OP_MODE_UE) != 0) {
     LOG_I(RLC, "Problem at RLC initiation \n");
   }
   nr_pdcp_layer_init();
-  nr_pdcp_module_init(pdcp_initmask, ue_id);
 }
 
 // Stupid function addition because UE itti messages queues definition is common with eNB
@@ -385,9 +376,6 @@ void start_oai_nrue_threads()
 
 int NB_UE_INST = 1;
 configmodule_interface_t *uniqCfg = NULL;
-
-// A global var to reduce the changes size
-ldpc_interface_t ldpc_interface = {0}, ldpc_interface_offload = {0};
 nrLDPC_coding_interface_t nrLDPC_coding_interface = {0};
 
 int main(int argc, char **argv)
@@ -449,6 +437,11 @@ int main(int argc, char **argv)
     }
   }
 
+  if (create_tasks_nrue(1) < 0) {
+    printf("cannot create ITTI tasks\n");
+    exit(-1); // need a softer mode
+  }
+
   int mode_offset = get_softmodem_params()->nsa ? NUMBER_OF_UE_MAX : 1;
   uint16_t node_number = get_softmodem_params()->node_number;
   ue_id_g = (node_number == 0) ? 0 : node_number - 2;
@@ -467,9 +460,20 @@ int main(int argc, char **argv)
     get_channel_model_mode(uniqCfg);
   }
 
-  // Delay to allow the convergence of the IIR filter on PRACH noise measurements at gNB side
-  if (IS_SOFTMODEM_RFSIM && !get_softmodem_params()->phy_test)
-    sleep(3);
+  // start time manager with some reasonable default for the running mode
+  // (may be overwritten in configuration file or command line)
+  void nr_pdcp_ms_tick(void);
+  void nr_rlc_ms_tick(void);
+  time_manager_tick_function_t tick_functions[] = {
+    nr_pdcp_ms_tick,
+    nr_rlc_ms_tick
+  };
+  int tick_functions_count = 2;
+  time_manager_start(tick_functions, tick_functions_count,
+                     // iq_samples time source for rfsim,
+                     // realtime time source if not
+                     IS_SOFTMODEM_RFSIM ? TIME_SOURCE_IQ_SAMPLES
+                                        : TIME_SOURCE_REALTIME);
 
   if (!get_softmodem_params()->nsa && get_softmodem_params()->emulate_l1)
     start_oai_nrue_threads();
@@ -507,11 +511,17 @@ int main(int argc, char **argv)
 
         UE[CC_id]->sl_mode = get_softmodem_params()->sl_mode;
         init_actor(&UE[CC_id]->sync_actor, "SYNC_", -1);
-        for (int i = 0; i < NUM_DL_ACTORS; i++) {
-          init_actor(&UE[CC_id]->dl_actors[i], "DL_", -1);
+        if (get_nrUE_params()->num_dl_actors > 0) {
+          UE[CC_id]->dl_actors = calloc_or_fail(get_nrUE_params()->num_dl_actors, sizeof(*UE[CC_id]->dl_actors));
+          for (int i = 0; i < get_nrUE_params()->num_dl_actors; i++) {
+            init_actor(&UE[CC_id]->dl_actors[i], "DL_", -1);
+          }
         }
-        for (int i = 0; i < NUM_UL_ACTORS; i++) {
-          init_actor(&UE[CC_id]->ul_actors[i], "UL_", -1);
+        if (get_nrUE_params()->num_ul_actors > 0) {
+          UE[CC_id]->ul_actors = calloc_or_fail(get_nrUE_params()->num_ul_actors, sizeof(*UE[CC_id]->ul_actors));
+          for (int i = 0; i < get_nrUE_params()->num_ul_actors; i++) {
+            init_actor(&UE[CC_id]->ul_actors[i], "UL_", -1);
+          }
         }
         init_nr_ue_vars(UE[CC_id], inst);
 
@@ -557,11 +567,6 @@ int main(int argc, char **argv)
   // wait for end of program
   printf("TYPE <CTRL-C> TO TERMINATE\n");
 
-  if (create_tasks_nrue(1) < 0) {
-    printf("cannot create ITTI tasks\n");
-    exit(-1); // need a softer mode
-  }
-
   // Sleep a while before checking all parameters have been used
   // Some are used directly in external threads, asynchronously
   sleep(2);
@@ -582,10 +587,10 @@ int main(int argc, char **argv)
     for (int CC_id = 0; CC_id < MAX_NUM_CCs; CC_id++) {
       PHY_VARS_NR_UE *phy_vars = PHY_vars_UE_g[0][CC_id];
       if (phy_vars) {
-        for (int i = 0; i < NUM_UL_ACTORS; i++) {
+        for (int i = 0; i < get_nrUE_params()->num_ul_actors; i++) {
           shutdown_actor(&phy_vars->ul_actors[i]);
         }
-        for (int i = 0; i < NUM_DL_ACTORS; i++) {
+        for (int i = 0; i < get_nrUE_params()->num_dl_actors; i++) {
           shutdown_actor(&phy_vars->dl_actors[i]);
         }
         int ret = pthread_join(phy_vars->main_thread, NULL);
@@ -594,6 +599,8 @@ int main(int argc, char **argv)
           ret = pthread_join(phy_vars->stat_thread, NULL);
           AssertFatal(ret == 0, "pthread_join error %d, errno %d (%s)\n", ret, errno, strerror(errno));
         }
+        if (phy_vars->rfdevice.trx_get_stats_func)
+          phy_vars->rfdevice.trx_get_stats_func(&phy_vars->rfdevice);
         if (phy_vars->rfdevice.trx_end_func)
           phy_vars->rfdevice.trx_end_func(&phy_vars->rfdevice);
       }
@@ -601,6 +608,9 @@ int main(int argc, char **argv)
   }
 
   free_nrLDPC_coding_interface(&nrLDPC_coding_interface);
+
+  time_manager_finish();
+
   free(pckg);
   return 0;
 }

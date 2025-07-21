@@ -368,8 +368,7 @@ NR_tda_info_t get_ul_tda_info(const NR_UE_UL_BWP_t *ul_bwp,
   NR_PUSCH_TimeDomainResourceAllocationList_t *tdalist = get_ul_tdalist(ul_bwp, controlResourceSetId, ss_type, rnti_type);
   // Definition of value j in Table 6.1.2.1.1-4 of 38.214
   int scs = ul_bwp->scs;
-  AssertFatal(scs >= 0 &&  scs < 5, "Subcarrier spacing indicatior %d invalid value\n", scs);
-  int j = scs == 0 ? 1 : scs;
+  int j = get_j_for_k2(scs);
   if (tdalist) {
     tda_info.valid_tda = tda_index < tdalist->list.count;
     if (!tda_info.valid_tda) {
@@ -4305,12 +4304,21 @@ int get_f3_dmrs_symbols(NR_PUCCH_Resource_t *pucchres, NR_PUCCH_Config_t *pucch_
 
 uint16_t compute_pucch_prb_size(uint8_t format,
                                 uint8_t nr_prbs,
-                                uint16_t O_uci,
+                                uint16_t O_csi,
+                                uint16_t O_ack,
+                                uint8_t O_sr,
                                 NR_PUCCH_MaxCodeRate_t *maxCodeRate,
                                 uint8_t Qm,
                                 uint8_t n_symb,
                                 uint8_t n_re_ctrl)
 {
+  // TODO: Consider also the case where there is a HARQ-ACK in response to a PDSCH reception without a corresponding PDCCH
+  //  as described in the 3GPP TS 38.213 - Section 9.2.5.2
+  if (O_csi > 0 && O_ack == 0) {
+    return nr_prbs;
+  }
+
+  int O_uci = O_csi + O_ack + O_sr;
   int O_crc = compute_pucch_crc_size(O_uci);
   int O_tot = O_uci + O_crc;
 
@@ -4427,7 +4435,10 @@ static uint8_t number_of_bits_set(uint8_t buf)
   return nb_of_bits_set;
 }
 
-static void compute_rsrp_bitlen(const NR_CSI_ReportConfig_t *csi_reportconfig, uint8_t nb_resources, nr_csi_report_t *csi_report)
+static void compute_rsrp_or_sinr_bitlen(const NR_CSI_ReportConfig_t *csi_reportconfig,
+                                        uint8_t nb_resources,
+                                        nr_csi_report_t *csi_report,
+                                        bool is_RSRP_configured)
 {
   if (NR_CSI_ReportConfig__groupBasedBeamReporting_PR_disabled == csi_reportconfig->groupBasedBeamReporting.present) {
     if (csi_reportconfig->groupBasedBeamReporting.choice.disabled->nrofReportedRS)
@@ -4445,13 +4456,20 @@ static void compute_rsrp_bitlen(const NR_CSI_ReportConfig_t *csi_reportconfig, u
     csi_report->CSI_report_bitlen.nb_ssbri_cri = 2;
 
   if (nb_resources) {
-    csi_report->CSI_report_bitlen.cri_ssbri_bitlen =ceil(log2 (nb_resources));
-    csi_report->CSI_report_bitlen.rsrp_bitlen = 7; // From spec 38.212 Table 6.3.1.1.2-6: CRI, SSBRI, and RSRP
-    csi_report->CSI_report_bitlen.diff_rsrp_bitlen = 4; // From spec 38.212 Table 6.3.1.1.2-6: CRI, SSBRI, and RSRP
+    csi_report->CSI_report_bitlen.cri_ssbri_bitlen = ceil(log2 (nb_resources));
+    if (is_RSRP_configured) {
+      csi_report->CSI_report_bitlen.rsrp_bitlen = 7; // From spec 38.212 Table 6.3.1.1.2-6: CRI, SSBRI, and RSRP
+      csi_report->CSI_report_bitlen.diff_rsrp_bitlen = 4; // From spec 38.212 Table 6.3.1.1.2-6: CRI, SSBRI, and RSRP
+    } else {
+      csi_report->CSI_report_bitlen.sinr_bitlen = 7; // From spec 38.212 Table 6.3.1.1.2-6A: CRI, SSBRI, and SINR
+      csi_report->CSI_report_bitlen.diff_sinr_bitlen = 4; // From spec 38.212 Table 6.3.1.1.2-6A: CRI, SSBRI, and SINR
+    }
   } else {
     csi_report->CSI_report_bitlen.cri_ssbri_bitlen = 0;
     csi_report->CSI_report_bitlen.rsrp_bitlen = 0;
     csi_report->CSI_report_bitlen.diff_rsrp_bitlen = 0;
+    csi_report->CSI_report_bitlen.sinr_bitlen = 0;
+    csi_report->CSI_report_bitlen.diff_sinr_bitlen = 0;
   }
 }
 
@@ -4462,7 +4480,7 @@ static uint8_t compute_ri_bitlen(const NR_CSI_ReportConfig_t *csi_reportconfig, 
 
   if (codebookConfig == NULL) {
     csi_report->csi_meas_bitlen.ri_bitlen = 0;
-    return 0;
+    return 1;
   }
 
   struct NR_CodebookConfig__codebookType__type1__subType__typeI_SinglePanel *type1single = NULL;
@@ -4878,9 +4896,13 @@ void compute_csi_bitlen(const NR_CSI_MeasConfig_t *csi_MeasConfig, nr_csi_report
     reportQuantity_type = csi_reportconfig->reportQuantity.present;
     csi_report->reportQuantity_type = reportQuantity_type;
     csi_report->reportConfigId = csi_reportconfig->reportConfigId;
+    csi_report->reportQuantity_type_r16 = NR_CSI_ReportConfig__ext2__reportQuantity_r16_PR_NOTHING;
+    if (csi_reportconfig->ext2 != NULL && csi_reportconfig->ext2->reportQuantity_r16)
+      csi_report->reportQuantity_type_r16 = csi_reportconfig->ext2->reportQuantity_r16->present;
 
     // setting the CSI or SSB index list
-    if (NR_CSI_ReportConfig__reportQuantity_PR_ssb_Index_RSRP == csi_report->reportQuantity_type) {
+    if (NR_CSI_ReportConfig__reportQuantity_PR_ssb_Index_RSRP == csi_report->reportQuantity_type
+        || NR_CSI_ReportConfig__ext2__reportQuantity_r16_PR_ssb_Index_SINR_r16 == csi_report->reportQuantity_type_r16) {
       for (int csi_idx = 0; csi_idx < csi_MeasConfig->csi_SSB_ResourceSetToAddModList->list.count; csi_idx++) {
         if (csi_MeasConfig->csi_SSB_ResourceSetToAddModList->list.array[csi_idx]->csi_SSB_ResourceSetId ==
             *(csi_resourceconfig->csi_RS_ResourceSetList.choice.nzp_CSI_RS_SSB->csi_SSB_ResourceSetList->list.array[0])){
@@ -4891,8 +4913,7 @@ void compute_csi_bitlen(const NR_CSI_MeasConfig_t *csi_MeasConfig, nr_csi_report
           break;
         }
       }
-    }
-    else {
+    } else {
       if (resourceType == NR_CSI_ResourceConfig__resourceType_periodic) {
         AssertFatal(csi_MeasConfig->nzp_CSI_RS_ResourceSetToAddModList != NULL,
                     "Wrong settings! Report quantity requires CSI-RS but csi_MeasConfig->nzp_CSI_RS_ResourceSetToAddModList is NULL\n");
@@ -4911,33 +4932,46 @@ void compute_csi_bitlen(const NR_CSI_MeasConfig_t *csi_MeasConfig, nr_csi_report
     }
     LOG_D(NR_MAC,"nb_resources %d\n",nb_resources);
     // computation of bit length depending on the report type
-    switch(reportQuantity_type){
-      case (NR_CSI_ReportConfig__reportQuantity_PR_ssb_Index_RSRP):
-        compute_rsrp_bitlen(csi_reportconfig, nb_resources, csi_report);
-        break;
-      case (NR_CSI_ReportConfig__reportQuantity_PR_cri_RSRP):
-        compute_rsrp_bitlen(csi_reportconfig, nb_resources, csi_report);
-        break;
-      case (NR_CSI_ReportConfig__reportQuantity_PR_cri_RI_CQI):
-        csi_report->csi_meas_bitlen.cri_bitlen = ceil(log2(nb_resources));
-        csi_report->csi_meas_bitlen.ri_restriction = compute_ri_bitlen(csi_reportconfig, csi_report);
-        compute_cqi_bitlen(csi_reportconfig, csi_report->csi_meas_bitlen.ri_restriction, csi_report);
-        break;
-      case (NR_CSI_ReportConfig__reportQuantity_PR_cri_RI_PMI_CQI):
-        csi_report->csi_meas_bitlen.cri_bitlen = ceil(log2(nb_resources));
-        csi_report->csi_meas_bitlen.ri_restriction = compute_ri_bitlen(csi_reportconfig, csi_report);
-        compute_cqi_bitlen(csi_reportconfig, csi_report->csi_meas_bitlen.ri_restriction, csi_report);
-        compute_pmi_bitlen(csi_reportconfig, csi_report->csi_meas_bitlen.ri_restriction, csi_report);
-        break;
-      case (NR_CSI_ReportConfig__reportQuantity_PR_cri_RI_LI_PMI_CQI):
-        csi_report->csi_meas_bitlen.cri_bitlen = ceil(log2(nb_resources));
-        csi_report->csi_meas_bitlen.ri_restriction = compute_ri_bitlen(csi_reportconfig, csi_report);
-        compute_li_bitlen(csi_reportconfig, csi_report->csi_meas_bitlen.ri_restriction, csi_report);
-        compute_cqi_bitlen(csi_reportconfig, csi_report->csi_meas_bitlen.ri_restriction, csi_report);
-        compute_pmi_bitlen(csi_reportconfig, csi_report->csi_meas_bitlen.ri_restriction, csi_report);
-        break;
-      default:
-        AssertFatal(1==0,"Not yet supported CSI report quantity type");
+    if (csi_report->reportQuantity_type_r16 != NR_CSI_ReportConfig__ext2__reportQuantity_r16_PR_NOTHING) {
+      switch (csi_report->reportQuantity_type_r16) {
+        case NR_CSI_ReportConfig__ext2__reportQuantity_r16_PR_ssb_Index_SINR_r16:
+          compute_rsrp_or_sinr_bitlen(csi_reportconfig, nb_resources, csi_report, false);
+          break;
+        case NR_CSI_ReportConfig__ext2__reportQuantity_r16_PR_cri_SINR_r16:
+          compute_rsrp_or_sinr_bitlen(csi_reportconfig, nb_resources, csi_report, false);
+          break;
+        default:
+          AssertFatal(1 == 0, "Not yet supported CSI report quantity type");
+      }
+    } else {
+      switch (reportQuantity_type) {
+        case (NR_CSI_ReportConfig__reportQuantity_PR_ssb_Index_RSRP):
+          compute_rsrp_or_sinr_bitlen(csi_reportconfig, nb_resources, csi_report, true);
+          break;
+        case (NR_CSI_ReportConfig__reportQuantity_PR_cri_RSRP):
+          compute_rsrp_or_sinr_bitlen(csi_reportconfig, nb_resources, csi_report, true);
+          break;
+        case (NR_CSI_ReportConfig__reportQuantity_PR_cri_RI_CQI):
+          csi_report->csi_meas_bitlen.cri_bitlen = ceil(log2(nb_resources));
+          csi_report->csi_meas_bitlen.ri_restriction = compute_ri_bitlen(csi_reportconfig, csi_report);
+          compute_cqi_bitlen(csi_reportconfig, csi_report->csi_meas_bitlen.ri_restriction, csi_report);
+          break;
+        case (NR_CSI_ReportConfig__reportQuantity_PR_cri_RI_PMI_CQI):
+          csi_report->csi_meas_bitlen.cri_bitlen = ceil(log2(nb_resources));
+          csi_report->csi_meas_bitlen.ri_restriction = compute_ri_bitlen(csi_reportconfig, csi_report);
+          compute_cqi_bitlen(csi_reportconfig, csi_report->csi_meas_bitlen.ri_restriction, csi_report);
+          compute_pmi_bitlen(csi_reportconfig, csi_report->csi_meas_bitlen.ri_restriction, csi_report);
+          break;
+        case (NR_CSI_ReportConfig__reportQuantity_PR_cri_RI_LI_PMI_CQI):
+          csi_report->csi_meas_bitlen.cri_bitlen = ceil(log2(nb_resources));
+          csi_report->csi_meas_bitlen.ri_restriction = compute_ri_bitlen(csi_reportconfig, csi_report);
+          compute_li_bitlen(csi_reportconfig, csi_report->csi_meas_bitlen.ri_restriction, csi_report);
+          compute_cqi_bitlen(csi_reportconfig, csi_report->csi_meas_bitlen.ri_restriction, csi_report);
+          compute_pmi_bitlen(csi_reportconfig, csi_report->csi_meas_bitlen.ri_restriction, csi_report);
+          break;
+        default:
+          AssertFatal(1 == 0, "Not yet supported CSI report quantity type");
+      }
     }
   }
 }
@@ -4946,11 +4980,16 @@ uint16_t nr_get_csi_bitlen(nr_csi_report_t *csi_report)
 {
   uint16_t csi_bitlen = 0;
   uint16_t max_bitlen = 0;
-  L1_RSRP_bitlen_t *CSI_report_bitlen = NULL;
+  L1_Meas_bitlen_t *CSI_report_bitlen = NULL;
   CSI_Meas_bitlen_t *csi_meas_bitlen = NULL;
 
-  if (csi_report->reportQuantity_type == NR_CSI_ReportConfig__reportQuantity_PR_ssb_Index_RSRP ||
-      csi_report->reportQuantity_type == NR_CSI_ReportConfig__reportQuantity_PR_cri_RSRP) {
+  if (csi_report->reportQuantity_type_r16 == NR_CSI_ReportConfig__ext2__reportQuantity_r16_PR_ssb_Index_SINR_r16
+      || csi_report->reportQuantity_type_r16 == NR_CSI_ReportConfig__ext2__reportQuantity_r16_PR_cri_SINR_r16) {
+    CSI_report_bitlen = &(csi_report->CSI_report_bitlen); // This might need to be moodif for Aperiodic CSI-RS measurements
+    csi_bitlen += ((CSI_report_bitlen->cri_ssbri_bitlen * CSI_report_bitlen->nb_ssbri_cri) + CSI_report_bitlen->sinr_bitlen
+                   + (CSI_report_bitlen->diff_sinr_bitlen * (CSI_report_bitlen->nb_ssbri_cri - 1)));
+  } else if (csi_report->reportQuantity_type == NR_CSI_ReportConfig__reportQuantity_PR_ssb_Index_RSRP
+             || csi_report->reportQuantity_type == NR_CSI_ReportConfig__reportQuantity_PR_cri_RSRP) {
     CSI_report_bitlen = &(csi_report->CSI_report_bitlen); // This might need to be moodif for Aperiodic CSI-RS measurements
     csi_bitlen += ((CSI_report_bitlen->cri_ssbri_bitlen * CSI_report_bitlen->nb_ssbri_cri) +
                    CSI_report_bitlen->rsrp_bitlen +(CSI_report_bitlen->diff_rsrp_bitlen *
@@ -5088,4 +5127,20 @@ int nr_get_prach_or_ul_mu(const NR_MsgA_ConfigCommon_r16_t *msgacc,
     mu = ul_mu;
 
   return mu;
+}
+
+int get_delta_for_k2(int mu)
+{
+  // 38.214 Table 6.1.2.1.1-5: Definition of value Δ
+  int delta_table[] = {2, 3, 4, 6, 24, 48};
+  AssertFatal(mu >= 0 && mu < sizeofArray(delta_table), "Invalid numerology %d\n", mu);
+  return delta_table[mu];
+}
+
+int get_j_for_k2(int mu)
+{
+  // 38.214 Table 6.1.2.1.1-4: Definition of value j
+  int j_table[] = {1, 1, 2, 3, 11, 21};
+  AssertFatal(mu >= 0 && mu < sizeofArray(j_table), "Invalid numerology %d\n", mu);
+  return j_table[mu];
 }

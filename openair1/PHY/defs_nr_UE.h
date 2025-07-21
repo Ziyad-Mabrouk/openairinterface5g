@@ -81,8 +81,6 @@
 #define bzero(s,n) (memset((s),0,(n)))
 /// suppress compiler warning for unused arguments
 #define UNUSED(x) (void)x;
-#define NUM_DL_ACTORS 4
-#define NUM_UL_ACTORS 2
 
 // Set the number of barriers for processSlotTX to 512. This value has to be at least 483 for NTN where
 // DL-to-UL offset is up to 483. The selected value is also half of the frame range so that
@@ -140,6 +138,7 @@ typedef struct {
   uint32_t rsrp[7];
   short rsrp_dBm[7];
   int ssb_rsrp_dBm[64];
+  float ssb_sinr_dB[64];
   // common measurements
   //! estimated noise power (linear)
   unsigned int   n0_power[NB_ANTENNAS_RX];
@@ -313,7 +312,7 @@ typedef struct {
 
 typedef struct {
   uint8_t csi_rs_generated_signal_bits;
-  int32_t **csi_rs_generated_signal;
+  c16_t **csi_rs_generated_signal;
   bool csi_im_meas_computed;
   uint32_t interference_plus_noise_power;
 } nr_csi_info_t;
@@ -518,8 +517,8 @@ typedef struct PHY_VARS_NR_UE_s {
   sl_nr_sidelink_mode_t sl_mode;
   sl_nr_ue_phy_params_t SL_UE_PHY_PARAMS;
   Actor_t sync_actor;
-  Actor_t dl_actors[NUM_DL_ACTORS];
-  Actor_t ul_actors[NUM_UL_ACTORS];
+  Actor_t *dl_actors;
+  Actor_t *ul_actors;
   ntn_config_message_t* ntn_config_message;
   pthread_t main_thread;
   pthread_t stat_thread;
@@ -577,7 +576,6 @@ typedef struct nr_phy_data_tx_s {
   // Sidelink Rx action decided by MAC
   sl_nr_tx_config_type_enum_t sl_tx_action;
   sl_nr_tx_config_psbch_pdu_t psbch_vars;
-
 } nr_phy_data_tx_t;
 
 typedef struct nr_phy_data_s {
@@ -600,6 +598,7 @@ typedef struct nr_rxtx_thread_data_s {
   int writeBlockSize;
   nr_phy_data_t phy_data;
   dynamic_barrier_t* next_barrier;
+  uint64_t absolute_deadline_us;
 } nr_rxtx_thread_data_t;
 
 typedef struct LDPCDecode_ue_s {

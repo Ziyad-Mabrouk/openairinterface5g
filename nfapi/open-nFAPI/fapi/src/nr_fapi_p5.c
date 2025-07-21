@@ -128,41 +128,39 @@ int fapi_nr_p5_message_pack(void *pMessageBuf,
   return packedMsgLen;
 }
 
-int fapi_nr_p5_message_unpack(void *pMessageBuf,
+bool fapi_nr_p5_message_unpack(void *pMessageBuf,
                               const uint32_t messageBufLen,
                               void *pUnpackedBuf,
                               const uint32_t unpackedBufLen,
                               nfapi_p4_p5_codec_config_t *config)
 {
   fapi_message_header_t *pMessageHeader = pUnpackedBuf;
-  uint8_t *pReadPackedMessage = pMessageBuf;
 
   AssertFatal(pMessageBuf != NULL && pUnpackedBuf != NULL, "P5 unpack supplied pointers are null");
-  uint8_t *end = (uint8_t *)pMessageBuf + messageBufLen;
   AssertFatal(messageBufLen >= NFAPI_HEADER_LENGTH && unpackedBufLen >= sizeof(fapi_message_header_t),
               "P5 unpack supplied message buffer is too small %d, %d\n",
               messageBufLen,
               unpackedBufLen);
   // clean the supplied buffer for - tag value blanking
   (void)memset(pUnpackedBuf, 0, unpackedBufLen);
-  if (fapi_nr_message_header_unpack(&pReadPackedMessage, NFAPI_HEADER_LENGTH, pMessageHeader, sizeof(fapi_message_header_t), 0)
-      < 0) {
+  if (!fapi_nr_message_header_unpack(pMessageBuf, NFAPI_HEADER_LENGTH, pMessageHeader, sizeof(fapi_message_header_t), 0)) {
     // failed to read the header
-    return -1;
+    return false;
   }
-
+  uint8_t *pReadPackedMessage = pMessageBuf + NFAPI_HEADER_LENGTH;
+  uint8_t *end = (uint8_t *)pMessageBuf + messageBufLen;
   int result = -1;
 
   if (check_nr_fapi_unpack_length(pMessageHeader->message_id, unpackedBufLen) == 0) {
     // the unpack buffer is not big enough for the struct
-    return -1;
+    return false;
   }
 
   // look for the specific message
   switch (pMessageHeader->message_id) {
     case NFAPI_NR_PHY_MSG_TYPE_PARAM_REQUEST:
       // PARAM request has no body;
-      result = 0;
+      result = 1;
       break;
 
     case NFAPI_NR_PHY_MSG_TYPE_PARAM_RESPONSE:
@@ -210,7 +208,7 @@ int fapi_nr_p5_message_unpack(void *pMessageBuf,
       break;
   }
 
-  return result;
+  return result != 0;
 }
 
 uint8_t pack_nr_param_request(void *msg, uint8_t **ppWritePackedMsg, uint8_t *end, nfapi_p4_p5_codec_config_t *config)
@@ -724,6 +722,53 @@ uint8_t unpack_nr_param_response(uint8_t **ppReadPackedMsg, uint8_t *end, void *
                                 &pNfapiMsg->vendor_extension));
 }
 
+static uint8_t pack_dbt_table_tlv_value(void *tlv, uint8_t **ppWritePackedMsg, uint8_t *end)
+{
+  nfapi_nr_dbt_tlv_ve_t *dbt_ve = (nfapi_nr_dbt_tlv_ve_t *)tlv;
+  nfapi_nr_dbt_pdu_t *dbt_config = &dbt_ve->value;
+  if (!( push16(dbt_config->num_dig_beams, ppWritePackedMsg, end) && push16(dbt_config->num_txrus, ppWritePackedMsg, end) )) {
+    return 0;
+  }
+  for (int i = 0; i< dbt_config->num_dig_beams; i++) {
+    const nfapi_nr_dig_beam_t *dig_beam = &dbt_config->dig_beam_list[i];
+    if (!(push16(dig_beam->beam_idx, ppWritePackedMsg, end))) {
+      return 0;
+    }
+    for (int k = 0; k< dbt_config->num_txrus; k++) {
+      const nfapi_nr_txru_t *tx_ru = &dig_beam->txru_list[k];
+      if (!(push16(tx_ru->dig_beam_weight_Re, ppWritePackedMsg, end) && push16(tx_ru->dig_beam_weight_Im, ppWritePackedMsg, end))) {
+        return 0;
+      }
+    }
+  }
+  return 1;
+}
+
+static uint8_t pack_pm_table_tlv_value(void *tlv, uint8_t **ppWritePackedMsg, uint8_t *end)
+{
+  nfapi_nr_pm_tlv_ve_t *pm_ve = (nfapi_nr_pm_tlv_ve_t *)tlv;
+  nfapi_nr_pm_list_t *pmi_list = &pm_ve->value;
+  if (!( push16(pmi_list->num_pm_idx, ppWritePackedMsg, end) )) {
+    return 0;
+  }
+  for (int i = 0; i< pmi_list->num_pm_idx; i++) {
+    const nfapi_nr_pm_pdu_t *pm_pdu = &pmi_list->pmi_pdu[i];
+    if (!(push16(pm_pdu->pm_idx, ppWritePackedMsg, end) && push16(pm_pdu->numLayers, ppWritePackedMsg, end)
+          && push16(pm_pdu->num_ant_ports, ppWritePackedMsg, end))) {
+      return 0;
+    }
+    for (int k = 0; k < pm_pdu->numLayers; k++) {
+      for (int j = 0; j < pm_pdu->num_ant_ports; j++) {
+        const nfapi_nr_pm_weights_t *pm_weight = &pm_pdu->weights[k][j];
+        if (!(push16(pm_weight->precoder_weight_Re, ppWritePackedMsg, end) && push16(pm_weight->precoder_weight_Im, ppWritePackedMsg, end))) {
+          return 0;
+        }
+      }
+    }
+  }
+  return 1;
+}
+
 uint8_t pack_nr_config_request(void *msg, uint8_t **ppWritePackedMsg, uint8_t *end, nfapi_p4_p5_codec_config_t *config)
 {
   uint8_t *pNumTLVFields = (uint8_t *)*ppWritePackedMsg;
@@ -1044,11 +1089,19 @@ uint8_t pack_nr_config_request(void *msg, uint8_t **ppWritePackedMsg, uint8_t *e
   // END Measurement Config
 
   // START Digital Beam Table (DBT) PDU
-  // Struct in nfapi/open-nFAPI/nfapi/public_inc/nfapi_nr_interface_scf.h nfapi_nr_dbt_pdu_t, currently unused
+  if (pNfapiMsg->dbt_config.num_dig_beams != 0) {
+    nfapi_nr_dbt_tlv_ve_t dbt_tlv = {.tl.tag = NFAPI_NR_CONFIG_BEAMFORMING_TABLE_TAG, .value = pNfapiMsg->dbt_config};
+    pack_nr_tlv(NFAPI_NR_CONFIG_BEAMFORMING_TABLE_TAG, &dbt_tlv, ppWritePackedMsg, end, &pack_dbt_table_tlv_value);
+    numTLVs++;
+  }
   // END Digital Beam Table (DBT) PDU
 
   // START Precoding Matrix (PM) PDU
-  // Struct in nfapi/open-nFAPI/nfapi/public_inc/nfapi_nr_interface_scf.h nfapi_nr_pm_pdu_t, currently unused, tag to use for AERIAL
+  if (pNfapiMsg->pmi_list.num_pm_idx != 0) {
+    nfapi_nr_pm_tlv_ve_t pm_tlv = {.tl.tag = NFAPI_NR_CONFIG_PRECODING_TABLE_V6_TAG, .value = pNfapiMsg->pmi_list};
+    pack_nr_tlv(NFAPI_NR_CONFIG_PRECODING_TABLE_V6_TAG, &pm_tlv, ppWritePackedMsg, end, &pack_pm_table_tlv_value);
+    numTLVs++;
+  }
   // is 0xA011 END Precoding Matrix (PM) PDU
 #ifndef ENABLE_AERIAL
   // START nFAPI TLVs included in CONFIG.request for IDLE and CONFIGURED states
@@ -1124,9 +1177,92 @@ uint8_t pack_nr_config_request(void *msg, uint8_t **ppWritePackedMsg, uint8_t *e
   // only increase if it was set
   numTLVs += pNfapiMsg->analog_beamforming_ve.analog_bf_vendor_ext.tl.tag == NFAPI_NR_FAPI_ANALOG_BF_VENDOR_EXTENSION_TAG;
 
+  AssertFatal(pNfapiMsg->analog_beamforming_ve.total_num_beams_vendor_ext.tl.tag == 0,
+              "Total num beams Vendor extension shouldn't be set!");
+  // The call to pack the TLV would be the same as any other TLV, it is only packed if the tag is set,
+  // so, it's safe to add the call to pack_nr_tlv even if it is not always set
+  retval &= pack_nr_tlv(NFAPI_NR_FAPI_TOTAL_NUM_BEAMS_VENDOR_EXTENSION_TAG,
+                        &(pNfapiMsg->analog_beamforming_ve.total_num_beams_vendor_ext),
+                        ppWritePackedMsg,
+                        end,
+                        &pack_uint8_tlv_value);
+  // only increase if it was set
+  numTLVs +=
+      pNfapiMsg->analog_beamforming_ve.total_num_beams_vendor_ext.tl.tag == NFAPI_NR_FAPI_TOTAL_NUM_BEAMS_VENDOR_EXTENSION_TAG;
+
+  for (int beam = 0; beam < pNfapiMsg->analog_beamforming_ve.total_num_beams_vendor_ext.value; beam++) {
+    AssertFatal(pNfapiMsg->analog_beamforming_ve.analog_beam_list[beam].tl.tag == 0,
+                "Analog beams list Vendor extension shouldn't be set!");
+    // The call to pack the TLV would be the same as any other TLV, it is only packed if the tag is set,
+    // so, it's safe to add the call to pack_nr_tlv even if it is not always set
+    retval &= pack_nr_tlv(NFAPI_NR_FAPI_ANALOG_BEAM_VENDOR_EXTENSION_TAG,
+                          &(pNfapiMsg->analog_beamforming_ve.analog_beam_list[beam]),
+                          ppWritePackedMsg,
+                          end,
+                          &pack_uint8_tlv_value);
+    // only increase if it was set
+    numTLVs += pNfapiMsg->analog_beamforming_ve.analog_bf_vendor_ext.tl.tag == NFAPI_NR_FAPI_TOTAL_NUM_BEAMS_VENDOR_EXTENSION_TAG;
+  }
+
   pNfapiMsg->num_tlv = numTLVs;
   retval &= push8(pNfapiMsg->num_tlv, &pNumTLVFields, end);
   return retval;
+}
+
+static uint8_t unpack_dbt_table_tlv_value(void *tlv, uint8_t **ppReadPackedMsg, uint8_t *end)
+{
+  nfapi_nr_dbt_pdu_t *dbt_config = (nfapi_nr_dbt_pdu_t *)tlv;
+  if (!(pull16(ppReadPackedMsg, &dbt_config->num_dig_beams, end) && pull16(ppReadPackedMsg, &dbt_config->num_txrus, end))) {
+    return 0;
+  }
+  if (dbt_config->num_dig_beams > 0) {
+    dbt_config->dig_beam_list = calloc(dbt_config->num_dig_beams, sizeof(*dbt_config->dig_beam_list));
+  }
+  for (int i = 0; i < dbt_config->num_dig_beams; i++) {
+    nfapi_nr_dig_beam_t *dig_beam = &dbt_config->dig_beam_list[i];
+    if (!(pull16(ppReadPackedMsg, &dig_beam->beam_idx, end))) {
+      return 0;
+    }
+    if (dbt_config->num_txrus > 0) {
+      dig_beam->txru_list = calloc(dbt_config->num_txrus, sizeof(*dig_beam->txru_list));
+    }
+    for (int k = 0; k < dbt_config->num_txrus; k++) {
+      nfapi_nr_txru_t *tx_ru = &dig_beam->txru_list[k];
+      if (!(pull16(ppReadPackedMsg, &tx_ru->dig_beam_weight_Re, end) && pull16(ppReadPackedMsg, &tx_ru->dig_beam_weight_Im, end))) {
+        return 0;
+      }
+    }
+  }
+  return 1;
+}
+
+static uint8_t unpack_pm_table_tlv_value(void *tlv, uint8_t **ppReadPackedMsg, uint8_t *end)
+{
+  nfapi_nr_pm_list_t *pm_list = (nfapi_nr_pm_list_t *)tlv;
+  if (!(pull16(ppReadPackedMsg, &pm_list->num_pm_idx, end))) {
+    return 0;
+  }
+  if (pm_list->num_pm_idx > 0) {
+    pm_list->pmi_pdu = calloc(pm_list->num_pm_idx, sizeof(*pm_list->pmi_pdu));
+  }
+  for (int i = 0; i < pm_list->num_pm_idx; i++) {
+    nfapi_nr_pm_pdu_t *pm_pdu = &pm_list->pmi_pdu[i];
+    if (!(pull16(ppReadPackedMsg, &pm_pdu->pm_idx, end) && pull16(ppReadPackedMsg, &pm_pdu->numLayers, end)
+          && pull16(ppReadPackedMsg, &pm_pdu->num_ant_ports, end))) {
+      return 0;
+    }
+    AssertFatal(pm_pdu->numLayers <= 4 && pm_pdu->num_ant_ports <= 4, "Precoding matrix size limited to 4X4 for the time being\n");
+    for (int k = 0; k < pm_pdu->numLayers; k++) {
+      for (int j = 0; j < pm_pdu->num_ant_ports; j++) {
+        nfapi_nr_pm_weights_t *pm_weight = &pm_pdu->weights[k][j];
+        if (!(pulls16(ppReadPackedMsg, &pm_weight->precoder_weight_Re, end)
+              && pulls16(ppReadPackedMsg, &pm_weight->precoder_weight_Im, end))) {
+          return 0;
+        }
+      }
+    }
+  }
+  return 1;
 }
 
 uint8_t unpack_nr_config_request(uint8_t **ppReadPackedMsg, uint8_t *end, void *msg, nfapi_p4_p5_codec_config_t *config)
@@ -1138,6 +1274,7 @@ uint8_t unpack_nr_config_request(uint8_t **ppReadPackedMsg, uint8_t *end, void *
   int config_beam_idx = 0;
   int tdd_periodicity_idx = 0;
   int symbol_per_slot_idx = 0;
+  int beam_ve_idx = 0;
   nfapi_nr_config_request_scf_t *pNfapiMsg = (nfapi_nr_config_request_scf_t *)msg;
   // unpack TLVs
 
@@ -1188,7 +1325,13 @@ uint8_t unpack_nr_config_request(uint8_t **ppReadPackedMsg, uint8_t *end, void *
        &unpack_uint8_tlv_value},
       {NFAPI_NR_CONFIG_TDD_PERIOD_TAG, &(pNfapiMsg->tdd_table.tdd_period), &unpack_uint8_tlv_value},
       {NFAPI_NR_CONFIG_SLOT_CONFIG_TAG, NULL, &unpack_uint8_tlv_value},
+      {NFAPI_NR_FAPI_NUM_BEAMS_PERIOD_VENDOR_EXTENSION_TAG, &(pNfapiMsg->analog_beamforming_ve.num_beams_period_vendor_ext), &unpack_uint8_tlv_value},
+      {NFAPI_NR_FAPI_ANALOG_BF_VENDOR_EXTENSION_TAG, &(pNfapiMsg->analog_beamforming_ve.analog_bf_vendor_ext), &unpack_uint8_tlv_value},
+      {NFAPI_NR_FAPI_TOTAL_NUM_BEAMS_VENDOR_EXTENSION_TAG, &(pNfapiMsg->analog_beamforming_ve.total_num_beams_vendor_ext), &unpack_uint8_tlv_value},
+      {NFAPI_NR_FAPI_ANALOG_BEAM_VENDOR_EXTENSION_TAG, NULL, &unpack_uint8_tlv_value},
       {NFAPI_NR_CONFIG_RSSI_MEASUREMENT_TAG, &(pNfapiMsg->measurement_config.rssi_measurement), &unpack_uint8_tlv_value},
+      {NFAPI_NR_CONFIG_BEAMFORMING_TABLE_TAG, NULL, &unpack_dbt_table_tlv_value},
+      {NFAPI_NR_CONFIG_PRECODING_TABLE_V6_TAG, NULL, &unpack_pm_table_tlv_value},
       {NFAPI_NR_NFAPI_P7_VNF_ADDRESS_IPV4_TAG, &(pNfapiMsg->nfapi_config.p7_vnf_address_ipv4), &unpack_ipv4_address_value},
       {NFAPI_NR_NFAPI_P7_VNF_ADDRESS_IPV6_TAG, &(pNfapiMsg->nfapi_config.p7_vnf_address_ipv6), &unpack_ipv6_address_value},
       {NFAPI_NR_NFAPI_P7_VNF_PORT_TAG, &(pNfapiMsg->nfapi_config.p7_vnf_port), &unpack_uint16_tlv_value},
@@ -1204,7 +1347,7 @@ uint8_t unpack_nr_config_request(uint8_t **ppReadPackedMsg, uint8_t *end, void *
   nfapi_tl_t generic_tl;
   uint8_t numBadTags = 0;
   unsigned long idx = 0;
-  while ((uint8_t *)(*ppReadPackedMsg) < end) {
+  while ((uint8_t *)(*ppReadPackedMsg) + 4 < end) {
     // unpack the tl and process the values accordingly
     if (unpack_tl(ppReadPackedMsg, &generic_tl, end) == 0)
       return 0;
@@ -1221,6 +1364,29 @@ uint8_t unpack_nr_config_request(uint8_t **ppReadPackedMsg, uint8_t *end, void *
         }
         int result = 0;
         switch (generic_tl.tag) {
+          case NFAPI_NR_FAPI_TOTAL_NUM_BEAMS_VENDOR_EXTENSION_TAG:
+            pNfapiMsg->analog_beamforming_ve.total_num_beams_vendor_ext.tl.tag = generic_tl.tag;
+            pNfapiMsg->analog_beamforming_ve.total_num_beams_vendor_ext.tl.length = generic_tl.length;
+            result = (*unpack_fns[idx].unpack_func)(&pNfapiMsg->analog_beamforming_ve.total_num_beams_vendor_ext, ppReadPackedMsg, end);
+            pNfapiMsg->analog_beamforming_ve.analog_beam_list = (nfapi_uint8_tlv_t *)malloc(
+                pNfapiMsg->analog_beamforming_ve.total_num_beams_vendor_ext.value * sizeof(nfapi_uint8_tlv_t));
+            beam_ve_idx = 0;
+            break;
+          case NFAPI_NR_FAPI_ANALOG_BEAM_VENDOR_EXTENSION_TAG:
+            unpack_fns[idx].tlv = &pNfapiMsg->analog_beamforming_ve.analog_beam_list[beam_ve_idx];
+            pNfapiMsg->analog_beamforming_ve.analog_beam_list[beam_ve_idx].tl.tag = generic_tl.tag;
+            pNfapiMsg->analog_beamforming_ve.analog_beam_list[beam_ve_idx].tl.length = generic_tl.length;
+            result = (*unpack_fns[idx].unpack_func)(&pNfapiMsg->analog_beamforming_ve.analog_beam_list[beam_ve_idx], ppReadPackedMsg, end);
+            beam_ve_idx ++;
+            break;
+          case NFAPI_NR_CONFIG_BEAMFORMING_TABLE_TAG:
+            unpack_fns[idx].tlv = &generic_tl;
+            result = (*unpack_fns[idx].unpack_func)(&pNfapiMsg->dbt_config, ppReadPackedMsg, end);
+            break;
+          case NFAPI_NR_CONFIG_PRECODING_TABLE_V6_TAG:
+            unpack_fns[idx].tlv = &generic_tl;
+            result = (*unpack_fns[idx].unpack_func)(&pNfapiMsg->pmi_list, ppReadPackedMsg, end);
+            break;
           case NFAPI_NR_CONFIG_NUM_PRACH_FD_OCCASIONS_TAG:
             pNfapiMsg->prach_config.num_prach_fd_occasions.tl.tag = generic_tl.tag;
             pNfapiMsg->prach_config.num_prach_fd_occasions.tl.length = generic_tl.length;

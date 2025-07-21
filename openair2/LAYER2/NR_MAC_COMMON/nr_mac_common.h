@@ -35,6 +35,7 @@
 #include "NR_CellGroupConfig.h"
 #include "NR_UE-NR-Capability.h"
 #include "nr_mac.h"
+#include "nr_prach_config.h"
 #include "common/utils/nr/nr_common.h"
 
 #define NB_SRS_PERIOD         (18)
@@ -53,18 +54,9 @@ typedef enum {
 } pusch_maxLength_t;
 
 typedef struct {
-  uint32_t format;
-  uint32_t start_symbol;
-  uint32_t N_t_slot;
-  uint32_t N_dur;
-  uint32_t N_RA_slot;
-  uint32_t N_RA_sfn;
-  uint32_t max_association_period;
-  int x;
-  int y;
-  int y2;
-  uint64_t s_map;
-} nr_prach_info_t;
+  uint16_t bwpStart;
+  uint16_t bwpSize;
+} bwp_info_t;
 
 uint32_t get_Y(const NR_SearchSpace_t *ss, int slot, rnti_t rnti);
 
@@ -156,8 +148,6 @@ void find_aggregation_candidates(uint8_t *aggregation_level,
                                  const NR_SearchSpace_t *ss,
                                  int maxL);
 
-uint16_t get_nr_prach_format_from_index(uint8_t index, uint32_t pointa, uint8_t unpaired);
-
 bool get_nr_prach_sched_from_info(nr_prach_info_t info,
                                   int config_index,
                                   int frame,
@@ -166,8 +156,6 @@ bool get_nr_prach_sched_from_info(nr_prach_info_t info,
                                   frequency_range_t freq_range,
                                   uint16_t *RA_sfn_index,
                                   uint8_t unpaired);
-
-nr_prach_info_t get_nr_prach_occasion_info_from_index(uint8_t index, frequency_range_t freq_range, uint8_t unpaired);
 
 uint8_t get_pusch_mcs_table(long *mcs_Table,
                             int is_tp,
@@ -184,8 +172,6 @@ uint8_t compute_nr_root_seq(NR_RACH_ConfigCommon_t *rach_config,
 int ul_ant_bits(NR_DMRS_UplinkConfig_t *NR_DMRS_UplinkConfig, long transformPrecoder);
 
 uint8_t get_pdsch_mcs_table(long *mcs_Table, int dci_format, int rnti_type, int ss_type);
-
-int get_format0(uint8_t index, uint8_t unpaired, frequency_range_t frequency_range);
 
 uint16_t get_NCS(uint8_t index, uint16_t format, uint8_t restricted_set_config);
 int compute_pucch_crc_size(int O_uci);
@@ -254,7 +240,9 @@ uint8_t get_pusch_nb_antenna_ports(NR_PUSCH_Config_t *pusch_Config,
 
 uint16_t compute_pucch_prb_size(uint8_t format,
                                 uint8_t nr_prbs,
-                                uint16_t O_uci,
+                                uint16_t O_csi,
+                                uint16_t O_ack,
+                                uint8_t O_sr,
                                 NR_PUCCH_MaxCodeRate_t *maxCodeRate,
                                 uint8_t Qm,
                                 uint8_t n_symb,
@@ -310,5 +298,9 @@ int get_nrofHARQ_ProcessesForPDSCH(const NR_UE_ServingCell_Info_t *sc_info);
 int get_nrofHARQ_ProcessesForPUSCH(const NR_UE_ServingCell_Info_t *sc_info);
 
 int nr_get_prach_or_ul_mu(const NR_MsgA_ConfigCommon_r16_t *msgacc, const NR_RACH_ConfigCommon_t *rach_ConfigCommon, const int ul_mu);
+
+int get_delta_for_k2(int mu);
+
+int get_j_for_k2(int mu);
 
 #endif

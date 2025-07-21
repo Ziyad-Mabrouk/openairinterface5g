@@ -392,13 +392,15 @@ static void dmrs_amp_mult(const uint32_t dmrs_port,
                           const c16_t *mod_dmrs,
                           c16_t *mod_dmrs_out,
                           const uint32_t n_dmrs,
-                          const pusch_dmrs_type_t dmrs_type)
+                          const pusch_dmrs_type_t dmrs_type,
+                          const unsigned int num_cdm_groups_no_data)
 {
+  float beta_dmrs_pusch = get_beta_dmrs_pusch(num_cdm_groups_no_data, dmrs_type);
   /* short array that hold amplitude for k_prime = 0 and k_prime = 1 */
   int32_t alpha_dmrs[2] __attribute((aligned(16)));
   for (int_fast8_t i = 0; i < sizeofArray(alpha_dmrs); i++) {
     const int32_t a = Wf[i] * Wt * AMP;
-    alpha_dmrs[i] = a;
+    alpha_dmrs[i] = a * beta_dmrs_pusch;
   }
 
   /* multiply amplitude with complex DMRS vector */
@@ -440,16 +442,16 @@ static void map_symbols(const nr_phy_pxsch_params_t p,
       c16_t mod_dmrs[ALNARS_16_4(n_dmrs)] __attribute((aligned(16)));
       if (p.transform_precoding == transformPrecoder_disabled) {
         nr_modulation(gold, n_dmrs * 2, DMRS_MOD_ORDER, (int16_t *)mod_dmrs);
-        dmrs_amp_mult(p.dmrs_port, p.Wt, p.Wf, mod_dmrs, mod_dmrs_amp, n_dmrs, p.dmrs_type);
+        dmrs_amp_mult(p.dmrs_port, p.Wt, p.Wf, mod_dmrs, mod_dmrs_amp, n_dmrs, p.dmrs_type, p.num_cdm_no_data);
       } else {
-        dmrs_amp_mult(p.dmrs_port, p.Wt, p.Wf, dmrs_seq, mod_dmrs_amp, n_dmrs, p.dmrs_type);
+        dmrs_amp_mult(p.dmrs_port, p.Wt, p.Wf, dmrs_seq, mod_dmrs_amp, n_dmrs, p.dmrs_type, p.num_cdm_no_data);
       }
     } else if ((p.pdu_bit_map & PUSCH_PDU_BITMAP_PUSCH_PTRS) && ptrs_symbol) {
       AssertFatal(p.transform_precoding == transformPrecoder_disabled, "PTRS NOT SUPPORTED IF TRANSFORM PRECODING IS ENABLED\n");
       c16_t mod_ptrs[ALNARS_16_4(p.nb_rb)] __attribute((aligned(16)));
       nr_modulation(gold, p.nb_rb, DMRS_MOD_ORDER, (int16_t *)mod_ptrs);
       const unsigned int beta_ptrs = 1; // temp value until power control is implemented
-      multadd_complex_vector_real_scalar((int16_t *)mod_ptrs, beta_ptrs * AMP, (int16_t *)mod_ptrs_amp, 1, p.nb_rb);
+      mult_complex_vector_real_scalar(mod_ptrs, beta_ptrs * AMP, mod_ptrs_amp, p.nb_rb);
     }
     map_current_symbol(p,
                        dmrs_symbol,
@@ -826,25 +828,17 @@ uint8_t nr_ue_pusch_common_procedures(PHY_VARS_NR_UE *UE,
                                       const NR_DL_FRAME_PARMS *frame_parms,
                                       const uint8_t n_antenna_ports,
                                       c16_t **txdataF,
+                                      c16_t **txdata,
                                       uint32_t linktype,
                                       bool was_symbol_used[NR_NUMBER_OF_SYMBOLS_PER_SLOT])
 {
-  const int tx_offset = frame_parms->get_samples_slot_timestamp(slot, frame_parms, 0);
-
   int N_RB = (linktype == link_type_sl) ? frame_parms->N_RB_SL : frame_parms->N_RB_UL;
 
-  c16_t **txdata = UE->common_vars.txData;
   for (int i = 0; i < NR_NUMBER_OF_SYMBOLS_PER_SLOT; i++) {
     if (was_symbol_used[i] == false)
       continue;
-    for(int ap = 0; ap < n_antenna_ports; ap++) {
-      apply_nr_rotation_TX(frame_parms,
-                          txdataF[ap],
-                          frame_parms->symbol_rotation[linktype],
-                          slot,
-                          N_RB,
-                          i,
-                          1);
+    for (int ap = 0; ap < n_antenna_ports; ap++) {
+      apply_nr_rotation_TX(frame_parms, txdataF[ap], frame_parms->symbol_rotation[linktype], slot, N_RB, i, 1);
     }
   }
 
@@ -853,25 +847,20 @@ uint8_t nr_ue_pusch_common_procedures(PHY_VARS_NR_UE *UE,
     if (frame_parms->Ncp == 1) { // extended cyclic prefix
       for (int i = 0; i < NR_NUMBER_OF_SYMBOLS_PER_SLOT_EXTENDED_CP; i++) {
         if (was_symbol_used[i] == false) {
-          memset(&txdata[ap][tx_offset + (frame_parms->ofdm_symbol_size + frame_parms->nb_prefix_samples) * i],
+          memset(&txdata[ap][(frame_parms->ofdm_symbol_size + frame_parms->nb_prefix_samples) * i],
                  0,
                  (frame_parms->nb_prefix_samples + frame_parms->ofdm_symbol_size) * sizeof(int32_t));
           continue;
         }
         PHY_ofdm_mod((int *)&txdataF[ap][frame_parms->ofdm_symbol_size * i],
-                    (int *)&txdata[ap][tx_offset + frame_parms->ofdm_symbol_size * i],
-                    frame_parms->ofdm_symbol_size,
-                    1,
-                    frame_parms->nb_prefix_samples,
-                    CYCLIC_PREFIX);
+                     (int *)&txdata[ap][frame_parms->ofdm_symbol_size * i],
+                     frame_parms->ofdm_symbol_size,
+                     1,
+                     frame_parms->nb_prefix_samples,
+                     CYCLIC_PREFIX);
       }
     } else { // normal cyclic prefix
-      nr_normal_prefix_mod(txdataF[ap],
-                           &txdata[ap][tx_offset],
-                           NR_NUMBER_OF_SYMBOLS_PER_SLOT,
-                           frame_parms,
-                           slot,
-                           was_symbol_used);
+      nr_normal_prefix_mod(txdataF[ap], txdata[ap], NR_NUMBER_OF_SYMBOLS_PER_SLOT, frame_parms, slot, was_symbol_used);
     }
   }
 

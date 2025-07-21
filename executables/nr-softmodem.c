@@ -23,11 +23,13 @@
 #define _GNU_SOURCE             /* See feature_test_macros(7) */
 
 #include "common/config/config_userapi.h"
+#include "common/utils/load_module_shlib.h"
 #include "RRC/LTE/rrc_vars.h"
 #ifdef SMBV
 #include "PHY/TOOLS/smbv.h"
 unsigned short config_frames[4] = {2,9,11,13};
 #endif
+#include "common/utils/time_manager/time_manager.h"
 #ifdef ENABLE_AERIAL
 #include "nfapi/oai_integration/aerial/fapi_nvIPC.h"
 #endif
@@ -85,6 +87,7 @@ unsigned short config_frames[4] = {2,9,11,13};
 #include "utils.h"
 #include "x2ap_eNB.h"
 #include "openair1/SCHED_NR/sched_nr.h"
+#include "openair2/SDAP/nr_sdap/nr_sdap.h"
 
 pthread_cond_t nfapi_sync_cond;
 pthread_mutex_t nfapi_sync_mutex;
@@ -204,11 +207,19 @@ void exit_function(const char *file, const char *function, const int line, const
 
   for (ru_id=0; ru_id<RC.nb_RU; ru_id++) {
     if (RC.ru[ru_id] && RC.ru[ru_id]->rfdevice.trx_end_func) {
+      if (RC.ru[ru_id]->rfdevice.trx_get_stats_func) {
+        RC.ru[ru_id]->rfdevice.trx_get_stats_func(&RC.ru[ru_id]->rfdevice);
+        RC.ru[ru_id]->rfdevice.trx_get_stats_func = NULL;
+      }
       RC.ru[ru_id]->rfdevice.trx_end_func(&RC.ru[ru_id]->rfdevice);
       RC.ru[ru_id]->rfdevice.trx_end_func = NULL;
     }
 
     if (RC.ru[ru_id] && RC.ru[ru_id]->ifdevice.trx_end_func) {
+      if (RC.ru[ru_id]->ifdevice.trx_get_stats_func) {
+        RC.ru[ru_id]->ifdevice.trx_get_stats_func(&RC.ru[ru_id]->ifdevice);
+        RC.ru[ru_id]->ifdevice.trx_get_stats_func = NULL;
+      }
       RC.ru[ru_id]->ifdevice.trx_end_func(&RC.ru[ru_id]->ifdevice);
       RC.ru[ru_id]->ifdevice.trx_end_func = NULL;
     }
@@ -303,11 +314,6 @@ static int create_gNB_tasks(ngran_node_t node_type, configmodule_interface_t *cf
   }
 
   if (gnb_nb > 0) {
-    if (itti_create_task (TASK_GNB_APP, gNB_app_task, NULL) < 0) {
-      LOG_E(GNB_APP, "Create task for gNB APP failed\n");
-      return -1;
-    }
-
     if (!NODE_IS_DU(node_type)) {
       if (itti_create_task (TASK_RRC_GNB, rrc_gnb_task, NULL) < 0) {
         LOG_E(NR_RRC, "Create task for NR RRC gNB failed\n");
@@ -329,6 +335,11 @@ static int create_gNB_tasks(ngran_node_t node_type, configmodule_interface_t *cf
       new_msg->ittiMsgHeader.originInstance = -1; /* meaning, it is local */
       itti_send_msg_to_task(TASK_RRC_GNB, 0 /*unused by callee*/, new_msg);
       itti_free(TASK_UNKNOWN, msg);
+    }
+
+    if (itti_create_task (TASK_GNB_APP, gNB_app_task, NULL) < 0) {
+      LOG_E(GNB_APP, "Create task for gNB APP failed\n");
+      return -1;
     }
 
     //Use check on x2ap to consider the NSA scenario 
@@ -420,11 +431,17 @@ int stop_L1(module_id_t gnb_id)
     stop_RU(RC.nb_RU);
 
   /* stop trx devices, multiple carrier currently not supported by RU */
+  if (ru->rfdevice.trx_get_stats_func) {
+    ru->rfdevice.trx_get_stats_func(&ru->rfdevice);
+  }
   if (ru->rfdevice.trx_stop_func) {
     ru->rfdevice.trx_stop_func(&ru->rfdevice);
     LOG_I(GNB_APP, "turned off RU rfdevice\n");
   }
 
+  if (ru->ifdevice.trx_get_stats_func) {
+    ru->ifdevice.trx_get_stats_func(&ru->rfdevice);
+  }
   if (ru->ifdevice.trx_stop_func) {
     ru->ifdevice.trx_stop_func(&ru->ifdevice);
     LOG_I(GNB_APP, "turned off RU ifdevice\n");
@@ -497,11 +514,8 @@ static  void wait_nfapi_init(char *thread_name)
 }
 
 void init_pdcp(void) {
-  uint32_t pdcp_initmask = IS_SOFTMODEM_NOS1 ? ENB_NAS_USE_TUN_BIT : LINK_ENB_PDCP_TO_GTPV1U_BIT;
-
   if (!NODE_IS_DU(get_node_type())) {
     nr_pdcp_layer_init();
-    nr_pdcp_module_init(pdcp_initmask, 0);
   }
 }
 
@@ -520,9 +534,9 @@ static void initialize_agent(ngran_node_t node_type, e2_agent_args_t oai_args)
   const gNB_RRC_INST* rrc = RC.nrrrc[0];
   assert(rrc != NULL && "rrc cannot be NULL");
 
-  const int mcc = rrc->configuration.mcc[0];
-  const int mnc = rrc->configuration.mnc[0];
-  const int mnc_digit_len = rrc->configuration.mnc_digit_length[0];
+  const int mcc = rrc->configuration.plmn[0].mcc;
+  const int mnc = rrc->configuration.plmn[0].mnc;
+  const int mnc_digit_len = rrc->configuration.plmn[0].mnc_digit_length;
   // const ngran_node_t node_type = rrc->node_type;
   int nb_id = 0;
   int cu_du_id = 0;
@@ -599,8 +613,6 @@ int main( int argc, char **argv ) {
   char *pckg = strdup(OAI_PACKAGE_VERSION);
   LOG_I(HW, "Version: %s\n", pckg);
 
-  // don't create if node doesn't connect to RRC/S1/GTP
-  const ngran_node_t node_type = get_node_type();
   // Init RAN context
   if (!(CONFIG_ISFLAGSET(CONFIG_ABORT)))
     NRRCConfig();
@@ -615,6 +627,9 @@ int main( int argc, char **argv ) {
       RCconfig_nr_prs();
   }
 
+  // don't create if node doesn't connect to RRC/S1/GTP
+  const ngran_node_t node_type = get_node_type();
+
   if (NFAPI_MODE != NFAPI_MODE_PNF) {
     int ret = create_gNB_tasks(node_type, uniqCfg);
     AssertFatal(ret == 0, "cannot create ITTI tasks\n");
@@ -628,6 +643,38 @@ int main( int argc, char **argv ) {
     pthread_cond_init(&sync_cond,NULL);
     pthread_mutex_init(&sync_mutex, NULL);
   }
+
+  // start time manager with some reasonable default for the running mode
+  // (may be overwritten in configuration file or command line)
+  void nr_pdcp_ms_tick(void);
+  void x2ap_ms_tick();
+  void nr_rlc_ms_tick(void);
+  time_manager_tick_function_t tick_functions[3];
+  int tick_functions_count = 0;
+  if (NODE_IS_MONOLITHIC(node_type)) {
+    /* monolithic */
+    tick_functions[tick_functions_count++] = nr_pdcp_ms_tick;
+    tick_functions[tick_functions_count++] = nr_rlc_ms_tick;
+    /* x2ap is enabled when in NSA mode */
+    if (get_softmodem_params()->nsa)
+      tick_functions[tick_functions_count++] = x2ap_ms_tick;
+  } else if (NODE_IS_CU(node_type)) {
+     /* CU */
+    tick_functions[tick_functions_count++] = nr_pdcp_ms_tick;
+    /* x2ap is enabled when in NSA mode */
+    if (get_softmodem_params()->nsa)
+      tick_functions[tick_functions_count++] = x2ap_ms_tick;
+  } else {
+     /* DU */
+    tick_functions[tick_functions_count++] = nr_rlc_ms_tick;
+  }
+  time_manager_start(tick_functions, tick_functions_count,
+                     // iq_samples time source for monolithic/du with rfsim,
+                     // realtime time source for other cases
+                     IS_SOFTMODEM_RFSIM
+                     && (NODE_IS_MONOLITHIC(node_type) || NODE_IS_DU(node_type))
+                         ? TIME_SOURCE_IQ_SAMPLES
+                         : TIME_SOURCE_REALTIME);
 
   // start the main threads
   number_of_cards = 1;
@@ -726,10 +773,17 @@ int main( int argc, char **argv ) {
   if (RC.nb_nr_L1_inst > 0 || RC.nb_RU > 0)
     stop_L1(0);
 
+  if (RC.nb_nr_macrlc_inst > 0) {
+    DevAssert(RC.nb_nr_macrlc_inst == 1);
+    mac_top_destroy_gNB(RC.nrmac[0]);
+  }
+
   pthread_cond_destroy(&sync_cond);
   pthread_mutex_destroy(&sync_mutex);
   pthread_cond_destroy(&nfapi_sync_cond);
   pthread_mutex_destroy(&nfapi_sync_mutex);
+
+  time_manager_finish();
 
   free(pckg);
   logClean();

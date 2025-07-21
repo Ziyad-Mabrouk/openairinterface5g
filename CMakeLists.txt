@@ -108,6 +108,7 @@ add_list_string_option(CMAKE_BUILD_TYPE "RelWithDebInfo" "Choose the type of bui
 # -so to avoid AVX512 instructions generation by gcc
 if(EXISTS "/proc/cpuinfo" AND NOT CROSS_COMPILE)
   file(STRINGS "/proc/cpuinfo" CPUFLAGS REGEX flags LIMIT_COUNT 1)
+  file(STRINGS "/proc/cpuinfo" CPUPART REGEX "CPU part" LIMIT_COUNT 1)
 else()
   message(WARNING "did not find /proc/cpuinfo -- not setting any x86-specific compilation variables")
 endif()
@@ -146,9 +147,20 @@ elseif(CMAKE_SYSTEM_PROCESSOR STREQUAL "x86_64")
     set(C_FLAGS_PROCESSOR "${C_FLAGS_PROCESSOR} -DSIMDE_X86_SSSE3_NATIVE")
   endif()
 elseif (CMAKE_SYSTEM_PROCESSOR STREQUAL "armv7l")
-  set(C_FLAGS_PROCESSOR "${C_FLAGS_PROCESSOR} -gdwarf-2 -mfloat-abi=hard -mfpu=neon -lgcc -lrt")
+    set(C_FLAGS_PROCESSOR "${C_FLAGS_PROCESSOR} -gdwarf-2 -mfloat-abi=hard -mfpu=neon -lgcc -lrt")
 elseif (CMAKE_SYSTEM_PROCESSOR STREQUAL "aarch64")
-  set(C_FLAGS_PROCESSOR "${C_FLAGS_PROCESSOR} -gdwarf-2 -lgcc -lrt")
+# Neoverse CPU part codes available at https://github.com/util-linux/util-linux/blob/master/sys-utils/lscpu-arm.c
+  if (CPUPART MATCHES "0xd40") # Neoverse-V1
+    set(C_FLAGS_PROCESSOR "${C_FLAGS_PROCESSOR} -gdwarf-2 -mcpu=neoverse-v1 -lgcc -lrt")
+  elseif (CPUPART MATCHES "0xd4f") # Neoverse-V2
+    set(C_FLAGS_PROCESSOR "${C_FLAGS_PROCESSOR} -gdwarf-2 -mcpu=neoverse-v2 -ftree-vectorize -lgcc -lrt")
+  elseif (CPUPART MATCHES "0xd0c") # Neoverse-N1
+    set(C_FLAGS_PROCESSOR "${C_FLAGS_PROCESSOR} -gdwarf-2 -mcpu=neoverse-n1  -lgcc -lrt")
+  elseif (CPUPART MATCHES "0xd49") # Neoverse-N2
+    set(C_FLAGS_PROCESSOR "${C_FLAGS_PROCESSOR} -gdwarf-2 -mcpu=neoverse-n2 -ftree-vectorize -lgcc -lrt")
+  else ()
+    set(C_FLAGS_PROCESSOR "${C_FLAGS_PROCESSOR} -gdwarf-2 -mcpu=native -lgcc -lrt")
+  endif()
 else()
   message(FATAL_ERROR "compile for CPU architecture ${CPUARCH}, CMAKE_SYSTEM_PROCESSOR ${CMAKE_SYSTEM_PROCESSOR}")
 endif()
@@ -288,14 +300,15 @@ add_definitions(-DHAVE_NETINET_IN_H)
 set(E2_AGENT "OFF" CACHE STRING "O-RAN-compliant E2 Agent")
 set_property(CACHE E2_AGENT PROPERTY STRINGS "ON" "OFF")
 
-set(E2AP_VERSION "E2AP_V2" CACHE STRING "E2AP version")
-set_property(CACHE E2AP_VERSION PROPERTY STRINGS "E2AP_V1" "E2AP_V2" "E2AP_V3")
-message(STATUS "Selected E2AP_VERSION: ${E2AP_VERSION}")
+if (E2_AGENT)
+  set(E2AP_VERSION "E2AP_V2" CACHE STRING "E2AP version")
+  set_property(CACHE E2AP_VERSION PROPERTY STRINGS "E2AP_V1" "E2AP_V2" "E2AP_V3")
+  message(STATUS "Selected E2AP version: ${E2AP_VERSION}")
 
-set(KPM_VERSION "KPM_V2_03" CACHE STRING "The KPM SM version to use")
-set_property(CACHE KPM_VERSION PROPERTY STRINGS "KPM_V2_03" "KPM_V3_00")
-message(STATUS "Selected KPM Version: ${KPM_VERSION}")
-
+  set(KPM_VERSION "KPM_V2_03" CACHE STRING "The KPM SM version to use")
+  set_property(CACHE KPM_VERSION PROPERTY STRINGS "KPM_V2_03" "KPM_V3_00")
+  message(STATUS "Selected KPM version: ${KPM_VERSION}")
+endif()
 
 add_boolean_option(ENABLE_IMSCOPE OFF "Enable phy scope based on imgui" OFF)
 add_boolean_option(ENABLE_IMSCOPE_RECORD OFF "Enable recording IQ data for imscope" OFF)
@@ -702,6 +715,11 @@ add_library(NFAPI_LIB ${NFAPI_SRC})
 target_link_libraries(NFAPI_LIB PUBLIC nfapi_common)
 target_link_libraries(NFAPI_LIB PUBLIC nr_fapi_p5 nr_fapi_p7)
 
+if(OAI_WLS)
+  target_compile_definitions(NFAPI_LIB PRIVATE ENABLE_WLS)
+else()
+  target_compile_definitions(NFAPI_LIB PRIVATE ENABLE_SOCKET)
+endif()
 include_directories(${NFAPI_DIR}/nfapi/public_inc)
 include_directories(${NFAPI_DIR}/nfapi/inc)
 
@@ -715,6 +733,9 @@ add_library(NFAPI_PNF_LIB ${NFAPI_PNF_SRC})
 target_link_libraries(NFAPI_PNF_LIB PRIVATE asn1_lte_rrc_hdrs asn1_nr_rrc_hdrs)
 target_link_libraries(NFAPI_PNF_LIB PUBLIC nr_fapi_p7)
 
+if(OAI_WLS)
+  target_compile_definitions(NFAPI_PNF_LIB PRIVATE ENABLE_WLS)
+endif()
 include_directories(${NFAPI_DIR}/pnf/public_inc)
 include_directories(${NFAPI_DIR}/pnf/inc)
 
@@ -733,6 +754,9 @@ endif()
 include_directories(${NFAPI_DIR}/vnf/public_inc)
 include_directories(${NFAPI_DIR}/vnf/inc)
 
+if(OAI_WLS)
+  target_compile_definitions(NFAPI_VNF_LIB PRIVATE ENABLE_WLS)
+endif()
 # nFAPI user defined code
 #############################
 set(NFAPI_USER_SRC
@@ -742,11 +766,15 @@ set(NFAPI_USER_SRC
   ${NFAPI_USER_DIR}/gnb_ind_vars.c
 )
 add_library(NFAPI_USER_LIB ${NFAPI_USER_SRC})
+if(OAI_WLS)
+  target_compile_definitions(NFAPI_USER_LIB PRIVATE ENABLE_WLS)
+elseif (OAI_AERIAL)
+  target_compile_definitions(NFAPI_USER_LIB PRIVATE ENABLE_AERIAL)
+else()
+  target_compile_definitions(NFAPI_USER_LIB PRIVATE ENABLE_SOCKET)
+endif()
 target_link_libraries(NFAPI_USER_LIB PRIVATE asn1_lte_rrc_hdrs asn1_nr_rrc_hdrs UTIL)
 target_link_libraries(NFAPI_USER_LIB PRIVATE nr_fapi_p7)
-if(OAI_AERIAL)
-  target_compile_definitions(NFAPI_USER_LIB PRIVATE ENABLE_AERIAL)
-endif()
 include_directories(${NFAPI_USER_DIR})
 
 # Layer 1
@@ -812,18 +840,14 @@ set(PHY_SRC_COMMON
   ${OPENAIR1_DIR}/PHY/CODING/viterbi_lte.c
   ${OPENAIR1_DIR}/PHY/INIT/init_top.c
   ${OPENAIR1_DIR}/PHY/INIT/lte_parms.c
-  ${OPENAIR1_DIR}/PHY/TOOLS/cadd_vv.c
   ${OPENAIR1_DIR}/PHY/TOOLS/dfts_load.c
   ${OPENAIR1_DIR}/PHY/TOOLS/log2_approx.c
-  ${OPENAIR1_DIR}/PHY/TOOLS/cmult_sv.c
-  ${OPENAIR1_DIR}/PHY/TOOLS/cmult_vv.c
   ${OPENAIR1_DIR}/PHY/TOOLS/cdot_prod.c
   ${OPENAIR1_DIR}/PHY/TOOLS/signal_energy.c
   ${OPENAIR1_DIR}/PHY/TOOLS/dB_routines.c
   ${OPENAIR1_DIR}/PHY/TOOLS/sqrt.c
-  ${OPENAIR1_DIR}/PHY/TOOLS/lut.c
-  ${OPENAIR1_DIR}/PHY/TOOLS/simde_operations.c
   ${OPENAIR1_DIR}/PHY/TOOLS/get_sin_cos.c
+  ${OPENAIR1_DIR}/PHY/TOOLS/oai_arith_operations.c
   )
 
 set(PHY_SRC
@@ -943,21 +967,16 @@ set(PHY_SRC_UE
   ${OPENAIR1_DIR}/PHY/NR_REFSIG/nr_gen_mod_table.c
   ${OPENAIR1_DIR}/PHY/NR_REFSIG/dmrs_nr.c
   ${OPENAIR1_DIR}/PHY/NR_REFSIG/ptrs_nr.c
-  ${OPENAIR1_DIR}/PHY/NR_TRANSPORT/nr_csi_rs.c
   ${OPENAIR1_DIR}/PHY/NR_ESTIMATION/nr_ul_channel_estimation.c
   ${OPENAIR1_DIR}/PHY/NR_ESTIMATION/nr_freq_equalization.c
   ${OPENAIR1_DIR}/PHY/NR_ESTIMATION/nr_measurements_gNB.c
   ${OPENAIR1_DIR}/PHY/TOOLS/file_output.c
-  ${OPENAIR1_DIR}/PHY/TOOLS/cadd_vv.c
   ${OPENAIR1_DIR}/PHY/TOOLS/log2_approx.c
-  ${OPENAIR1_DIR}/PHY/TOOLS/cmult_sv.c
-  ${OPENAIR1_DIR}/PHY/TOOLS/cmult_vv.c
   ${OPENAIR1_DIR}/PHY/TOOLS/cdot_prod.c
   ${OPENAIR1_DIR}/PHY/TOOLS/signal_energy.c
   ${OPENAIR1_DIR}/PHY/TOOLS/dB_routines.c
   ${OPENAIR1_DIR}/PHY/TOOLS/sqrt.c
-  ${OPENAIR1_DIR}/PHY/TOOLS/lut.c
-  ${OPENAIR1_DIR}/PHY/TOOLS/simde_operations.c
+  ${OPENAIR1_DIR}/PHY/TOOLS/oai_arith_operations.c
   ${PHY_POLARSRC}
   ${PHY_SMALLBLOCKSRC}
   ${PHY_NRLDPC_CODINGIF}
@@ -1001,16 +1020,12 @@ set(PHY_SRC_UE
   ${OPENAIR1_DIR}/PHY/NR_UE_ESTIMATION/nr_ue_measurements.c
   ${OPENAIR1_DIR}/PHY/NR_UE_ESTIMATION/nr_adjust_gain.c
   ${OPENAIR1_DIR}/PHY/TOOLS/file_output.c
-  ${OPENAIR1_DIR}/PHY/TOOLS/cadd_vv.c
   ${OPENAIR1_DIR}/PHY/TOOLS/log2_approx.c
-  ${OPENAIR1_DIR}/PHY/TOOLS/cmult_sv.c
-  ${OPENAIR1_DIR}/PHY/TOOLS/cmult_vv.c
   ${OPENAIR1_DIR}/PHY/TOOLS/cdot_prod.c
   ${OPENAIR1_DIR}/PHY/TOOLS/signal_energy.c
   ${OPENAIR1_DIR}/PHY/TOOLS/dB_routines.c
   ${OPENAIR1_DIR}/PHY/TOOLS/sqrt.c
-  ${OPENAIR1_DIR}/PHY/TOOLS/lut.c
-  ${OPENAIR1_DIR}/PHY/TOOLS/simde_operations.c
+  ${OPENAIR1_DIR}/PHY/TOOLS/oai_arith_operations.c
   ${OPENAIR1_DIR}/PHY/INIT/nr_init_ue.c
   ${PHY_POLARSRC}
   ${PHY_SMALLBLOCKSRC}
@@ -1047,7 +1062,7 @@ add_library(PHY_NR_COMMON ${PHY_NR_SRC_COMMON})
 target_link_libraries(PHY_NR_COMMON PUBLIC UTIL)
 
 add_library(PHY_NR ${PHY_NR_SRC})
-target_link_libraries(PHY_NR nr_phy_common nr_common)
+target_link_libraries(PHY_NR nr_phy_common nr_common nr_fapi_p5)
 
 add_library(PHY_NR_NO_AVX_256 ${PHY_NR_SRC})
 target_link_libraries(PHY_NR_NO_AVX_256 nr_phy_common nr_common)
@@ -1148,10 +1163,7 @@ set(L2_NR_SRC
   ${NR_RRC_DIR}/rrc_gNB.c
   ${NR_RRC_DIR}/mac_rrc_dl_direct.c
   ${NR_RRC_DIR}/mac_rrc_dl_f1ap.c
-  ${NR_RRC_DIR}/nr_rrc_config.c
   ${NR_RRC_DIR}/rrc_gNB_nsa.c
-  ${NR_RRC_DIR}/rrc_gNB_internode.c
-  ${NR_RRC_DIR}/rrc_gNB_reconfig.c
   ${NR_RRC_DIR}/rrc_gNB_UE_context.c
   ${NR_RRC_DIR}/rrc_gNB_NGAP.c
   ${NR_RRC_DIR}/rrc_gNB_radio_bearers.c
@@ -1233,6 +1245,7 @@ set (MAC_NR_SRC
   ${NR_GNB_MAC_DIR}/mac_rrc_dl_handler.c
   ${NR_GNB_MAC_DIR}/mac_rrc_ul_direct.c
   ${NR_GNB_MAC_DIR}/mac_rrc_ul_f1ap.c
+  ${NR_GNB_MAC_DIR}/nr_radio_config.c
  )
 
 
@@ -1378,7 +1391,6 @@ include_directories("${OPENAIR1_DIR}/SCHED_NR_UE")
 ##########################
 
 add_library (GTPV1U
-  ${NR_RRC_DIR}/rrc_gNB_GTPV1U.c
   ${RRC_DIR}/rrc_eNB_GTPV1U.c
   ${OPENAIR3_DIR}/ocp-gtpu/gtp_itf.cpp
   )
@@ -1835,12 +1847,19 @@ target_link_libraries(nr-softmodem PRIVATE
   ITTI ${NAS_UE_LIB} lte_rrc nr_rrc
   ngap s1ap L2_LTE_NR L2_NR MAC_NR_COMMON NFAPI_LIB NFAPI_VNF_LIB NFAPI_PNF_LIB NFAPI_USER_LIB SIMU
   x2ap f1ap m2ap m3ap e1ap shlib_loader
+  time_management
   -Wl,--end-group z dl)
 
 target_link_libraries(nr-softmodem PRIVATE pthread m CONFIG_LIB rt sctp)
 target_link_libraries(nr-softmodem PRIVATE ${T_LIB})
 target_link_libraries(nr-softmodem PRIVATE asn1_nr_rrc_hdrs asn1_lte_rrc_hdrs)
 target_link_libraries(nr-softmodem PRIVATE asn1_nr_rrc_hdrs asn1_lte_rrc_hdrs)
+add_boolean_option(OAI_WLS OFF "Activate OAI's WLS driver" OFF)
+if (OAI_WLS)
+    target_link_libraries(nr-softmodem PUBLIC wls_integration_lib)
+else()
+    target_link_libraries(nr-softmodem PUBLIC nfapi_socket_lib)
+endif()
 add_boolean_option(OAI_AERIAL OFF "Activate OAI's AERIAL driver" OFF)
 if (OAI_AERIAL)
   target_compile_definitions(nr-softmodem PUBLIC ENABLE_AERIAL)
@@ -1867,6 +1886,7 @@ add_executable(nr-cuup
 target_link_libraries(nr-cuup PRIVATE
                       CONFIG_LIB ITTI SCTP_CLIENT
                       GTPV1U e1ap f1ap
+                      time_management
                       z sctp dl pthread shlib_loader ${T_LIB})
 target_link_libraries(nr-cuup PRIVATE asn1_lte_rrc_hdrs asn1_nr_rrc_hdrs)
 if(E2_AGENT)
@@ -1898,6 +1918,7 @@ target_link_libraries(nr-uesoftmodem PRIVATE
   nr_rrc SECURITY UTIL HASHTABLE SCHED_RU_LIB SCHED_NR_UE_LIB
   PHY_COMMON PHY_NR_COMMON PHY_NR_UE NR_L2_UE MAC_NR_COMMON NFAPI_LIB
   ITTI SIMU shlib_loader
+  time_management
   -Wl,--end-group z dl)
 
 target_link_libraries(nr-uesoftmodem PRIVATE pthread m CONFIG_LIB rt nr_ue_phy_meas)
@@ -2064,6 +2085,7 @@ foreach(myExe dlsim dlsim_tm7 ulsim pbchsim scansim mbmssim pdcchsim pucchsim pr
     pthread m rt CONFIG_LIB ${T_LIB} dl shlib_loader
     )
   target_link_libraries(${myExe} PRIVATE asn1_lte_rrc_hdrs)
+  add_dependencies(${myExe} coding)
 
 endforeach(myExe)
 
@@ -2116,12 +2138,18 @@ include(${OPENAIR1_DIR}/PHY/CODING/nrLDPC_decoder/nrLDPC_tools/CMakeLists.txt)
 
 set(ENABLE_TESTS OFF CACHE STRING "Activate build of tests")
 set_property(CACHE ENABLE_TESTS PROPERTY TYPE BOOL)
-if(ENABLE_TESTS)
-  # activates globally adding tests such that they can be run using ctest
-  enable_testing()
+set(ENABLE_PHYSIM_TESTS OFF CACHE STRING "Activate build of physim tests")
+set_property(CACHE ENABLE_PHYSIM_TESTS PROPERTY TYPE BOOL)
+
+if(ENABLE_TESTS OR ENABLE_PHYSIM_TESTS)
   # meta-target: each test is supposed to add_dependencies(tests ${NEWTEST})
   # then, it is possible to build and execute all tests using "ninja tests && ctest"
   add_custom_target(tests)
+  # activates globally adding tests such that they can be run using ctest
+  enable_testing()
+endif()
+
+if(ENABLE_TESTS)
   find_package(GTest)
   if (NOT GTest_FOUND)
     message(STATUS "GTest package not found, will download googletest automatically. To prevent that install google test on your system (libgtest-dev)")

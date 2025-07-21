@@ -45,18 +45,26 @@
 //#define DEBUG_RXDATA
 //#define SRS_IND_DEBUG
 
-int beam_index_allocation(int fapi_beam_index, NR_gNB_COMMON *common_vars, int slot, int symbols_per_slot, int bitmap_symbols)
+int beam_index_allocation(bool das,
+                          int fapi_beam_index,
+                          nfapi_nr_analog_beamforming_ve_t *analog_bf,
+                          NR_gNB_COMMON *common_vars,
+                          int slot,
+                          int symbols_per_slot,
+                          int bitmap_symbols)
 {
   if (!common_vars->beam_id)
     return 0;
+  if (das)
+    return fapi_beam_index;
 
+  int ru_beam_idx =  analog_bf->analog_beam_list[fapi_beam_index].value;
   int idx = -1;
   for (int j = 0; j < common_vars->num_beams_period; j++) {
+    // L2 analog beam implementation is slot based, so we need to verify occupancy for the whole slot
     for (int i = 0; i < symbols_per_slot; i++) {
-      if (((bitmap_symbols >> i) & 0x01) == 0)
-        continue;
       int current_beam = common_vars->beam_id[j][slot * symbols_per_slot + i];
-      if (current_beam == -1 || current_beam == fapi_beam_index)
+      if (current_beam == -1 || current_beam == ru_beam_idx)
         idx = j;
       else {
         idx = -1;
@@ -66,12 +74,12 @@ int beam_index_allocation(int fapi_beam_index, NR_gNB_COMMON *common_vars, int s
     if (idx != -1)
       break;
   }
-  AssertFatal(idx >= 0, "Couldn't allocate beam ID %d\n", fapi_beam_index);
+  AssertFatal(idx >= 0, "Couldn't allocate beam ID %d\n", ru_beam_idx);
   for (int j = 0; j < symbols_per_slot; j++) {
     if (((bitmap_symbols >> j) & 0x01))
-      common_vars->beam_id[idx][slot * symbols_per_slot + j] = fapi_beam_index;
+      common_vars->beam_id[idx][slot * symbols_per_slot + j] = ru_beam_idx;
   }
-  LOG_D(PHY, "Allocating beam %d in slot %d\n", idx, slot);
+  LOG_D(PHY, "Allocating beam_id[%d] %d in slot %d\n", idx, ru_beam_idx, slot);
   return idx;
 }
 
@@ -131,7 +139,9 @@ void nr_common_signal_procedures(PHY_VARS_gNB *gNB, int frame, int slot, nfapi_n
   int txdataF_offset = slot * fp->samples_per_slot_wCP;
   // beam number in a scenario with multiple concurrent beams
   int bitmap = SL_to_bitmap(ssb_start_symbol, 4); // 4 ssb symbols
-  int beam_nb = beam_index_allocation(pb->prgs_list[0].dig_bf_interface_list[0].beam_idx,
+  int beam_nb = beam_index_allocation(gNB->enable_analog_das,
+                                      pb->prgs_list[0].dig_bf_interface_list[0].beam_idx,
+                                      &cfg->analog_beamforming_ve,
                                       &gNB->common_vars,
                                       slot,
                                       fp->symbols_per_slot,
@@ -272,27 +282,37 @@ void phy_procedures_gNB_TX(processingData_L1tx_t *msgTx,
       int lprime_num = mapping_parms.lprime + 1;
       for (int j = 0; j < mapping_parms.size; j++)
         csi_bitmap |= ((1 << lprime_num) - 1) << mapping_parms.loverline[j];
-      int beam_nb = beam_index_allocation(pb->prgs_list[0].dig_bf_interface_list[0].beam_idx,
+      int beam_nb = beam_index_allocation(gNB->enable_analog_das,
+                                          pb->prgs_list[0].dig_bf_interface_list[0].beam_idx,
+                                          &cfg->analog_beamforming_ve,
                                           &gNB->common_vars,
                                           slot,
                                           fp->symbols_per_slot,
                                           csi_bitmap);
 
       nr_generate_csi_rs(&gNB->frame_parms,
-                         (int32_t **)gNB->common_vars.txdataF[beam_nb],
+                         &mapping_parms,
                          gNB->TX_AMP,
-                         csi_params,
                          slot,
-                         &mapping_parms);
+                         csi_params->freq_density,
+                         csi_params->start_rb,
+                         csi_params->nr_of_rbs,
+                         csi_params->symb_l0,
+                         csi_params->symb_l1,
+                         csi_params->row,
+                         csi_params->scramb_id,
+                         csi_params->power_control_offset_ss,
+                         csi_params->cdm_type,
+                         gNB->common_vars.txdataF[beam_nb]);
       csirs->active = 0;
     }
   }
 
   //apply the OFDM symbol rotation here
-  if (gNB->phase_comp) {
-    start_meas(&gNB->phase_comp_stats);
-    for(int i = 0; i < gNB->common_vars.num_beams_period; ++i) {
-      for (int aa = 0; aa < cfg->carrier_config.num_tx_ant.value; aa++) {
+  start_meas(&gNB->phase_comp_stats);
+  for (int i = 0; i < gNB->common_vars.num_beams_period; ++i) {
+    for (int aa = 0; aa < cfg->carrier_config.num_tx_ant.value; aa++) {
+      if (gNB->phase_comp) {
         apply_nr_rotation_TX(fp,
                              &gNB->common_vars.txdataF[i][aa][txdataF_offset],
                              fp->symbol_rotation[0],
@@ -300,13 +320,16 @@ void phy_procedures_gNB_TX(processingData_L1tx_t *msgTx,
                              fp->N_RB_DL,
                              0,
                              fp->Ncp == EXTENDED ? 12 : 14);
-        T(T_GNB_PHY_DL_OUTPUT_SIGNAL, T_INT(0),
-          T_INT(frame), T_INT(slot),
-          T_INT(aa), T_BUFFER(&gNB->common_vars.txdataF[aa][txdataF_offset], fp->samples_per_slot_wCP*sizeof(int32_t)));
       }
+      T(T_GNB_PHY_DL_OUTPUT_SIGNAL,
+        T_INT(0),
+        T_INT(frame),
+        T_INT(slot),
+        T_INT(aa),
+        T_BUFFER(&gNB->common_vars.txdataF[i][aa][txdataF_offset], fp->samples_per_slot_wCP * sizeof(int32_t)));
     }
-    stop_meas(&gNB->phase_comp_stats);
   }
+  stop_meas(&gNB->phase_comp_stats);
 
   VCD_SIGNAL_DUMPER_DUMP_FUNCTION_BY_NAME(VCD_SIGNAL_DUMPER_FUNCTIONS_PHY_PROCEDURES_gNB_TX + gNB->CC_id, 0);
 }
@@ -1035,6 +1058,9 @@ int phy_procedures_gNB_uespec_RX(PHY_VARS_gNB *gNB, int frame_rx, int slot_rx, N
             nr_srs_bf_report.num_symbols = 1 << srs_pdu->num_symbols;
             nr_srs_bf_report.wide_band_snr = srs_est >= 0 ? (gNB->srs->snr + 64) << 1 : 0xFF; // 0xFF will be set if this field is invalid
             nr_srs_bf_report.num_reported_symbols = 1 << srs_pdu->num_symbols;
+            AssertFatal(nr_srs_bf_report.num_reported_symbols == 1,
+                        "nr_srs_bf_report.num_reported_symbols %i not handled yet!\n",
+                        nr_srs_bf_report.num_reported_symbols);
             fill_srs_reported_symbol(&nr_srs_bf_report.reported_symbol_list[0], srs_pdu, frame_parms->N_RB_UL, snr_per_rb, srs_est);
 
 #ifdef SRS_IND_DEBUG
@@ -1042,13 +1068,13 @@ int phy_procedures_gNB_uespec_RX(PHY_VARS_gNB *gNB, int frame_rx, int slot_rx, N
             LOG_I(NR_PHY, "nr_srs_bf_report.num_symbols = %i\n", nr_srs_bf_report.num_symbols);
             LOG_I(NR_PHY, "nr_srs_bf_report.wide_band_snr = %i (%i dB)\n", nr_srs_bf_report.wide_band_snr, (nr_srs_bf_report.wide_band_snr >> 1) - 64);
             LOG_I(NR_PHY, "nr_srs_bf_report.num_reported_symbols = %i\n", nr_srs_bf_report.num_reported_symbols);
-            LOG_I(NR_PHY, "nr_srs_bf_report.prgs[0].num_prgs = %i\n", nr_srs_bf_report.prgs[0].num_prgs);
-            for (int prg_idx = 0; prg_idx < nr_srs_bf_report.prgs[0].num_prgs; prg_idx++) {
+            LOG_I(NR_PHY, "nr_srs_bf_report.reported_symbol_list[0].num_prgs = %i\n", nr_srs_bf_report.reported_symbol_list[0].num_prgs);
+            for (int prg_idx = 0; prg_idx < nr_srs_bf_report.reported_symbol_list[0].num_prgs; prg_idx++) {
               LOG_I(NR_PHY,
-                    "nr_srs_beamforming_report.prgs[0].prg_list[%3i].rb_snr = %i (%i dB)\n",
+                    "nr_srs_beamforming_report.reported_symbol_list[0].prg_list[%3i].rb_snr = %i (%i dB)\n",
                     prg_idx,
-                     nr_srs_bf_report.prgs[0].prg_list[prg_idx].rb_snr,
-                    (nr_srs_bf_report.prgs[0].prg_list[prg_idx].rb_snr >> 1) - 64);
+                     nr_srs_bf_report.reported_symbol_list[0].prg_list[prg_idx].rb_snr,
+                    (nr_srs_bf_report.reported_symbol_list[0].prg_list[prg_idx].rb_snr >> 1) - 64);
             }
 #endif
 

@@ -45,6 +45,7 @@
 #include "common/utils/ds/seq_arr.h"
 #include "common/utils/nr/nr_common.h"
 #include "common/utils/ds/byte_array.h"
+#include "openair2/LAYER2/nr_rlc/nr_rlc_configuration.h"
 
 #define NR_SCHED_LOCK(lock)                                        \
   do {                                                             \
@@ -74,7 +75,7 @@
 #include "NR_BCCH-BCH-Message.h"
 #include "NR_CellGroupConfig.h"
 #include "NR_BCCH-DL-SCH-Message.h"
-#include "openair2/RRC/NR/nr_rrc_config.h"
+#include "nr_radio_config.h"
 
 /* PHY */
 #include "time_meas.h"
@@ -87,10 +88,8 @@
 
 /* MAC */
 #include "LAYER2/NR_MAC_COMMON/nr_mac_common.h"
+#include "LAYER2/NR_MAC_gNB/mac_config.h"
 #include "NR_TAG.h"
-
-#include <openair3/UICC/usim_interface.h>
-
 
 /* Defs */
 #define MAX_NUM_BWP 5
@@ -100,7 +99,6 @@
 #define NR_NB_RA_PROC_MAX 4
 #define MAX_NUM_OF_SSB 64
 #define MAX_NUM_NR_PRACH_PREAMBLES 64
-#define MIN_NUM_PRBS_TO_SCHEDULE  5
 
 uint8_t nr_get_rv(int rel_round);
 
@@ -179,6 +177,7 @@ typedef struct nr_mac_config_t {
   int32_t *bw_list;
   int num_agg_level_candidates[NUM_PDCCH_AGG_LEVELS];
   nr_redcap_config_t *redcap;
+  bool do_SINR;
 } nr_mac_config_t;
 
 typedef struct NR_preamble_ue {
@@ -197,7 +196,8 @@ typedef struct NR_sched_pdcch {
   uint8_t InterleaverSize;
   uint16_t ShiftIndex;
   uint8_t DurationSymbols;
-  int n_rb;
+  uint16_t n_rb;
+  uint16_t rb_start;
 } NR_sched_pdcch_t;
 
 /*! \brief gNB template for the Random access information */
@@ -228,8 +228,6 @@ typedef struct {
   NR_beam_alloc_t Msg3_beam;
   /// harq_pid used for Msg4 transmission
   uint8_t harq_pid;
-  /// UE RNTI allocated during RAR
-  rnti_t rnti;
   /// RA RNTI allocated from received PRACH
   uint16_t RA_rnti;
   /// MsgB RNTI allocated from received MsgA
@@ -250,25 +248,12 @@ typedef struct {
   int msg3_nbSymb;
   /// MAC PDU length for Msg4
   int mac_pdu_length;
-  /// RA search space
-  NR_SearchSpace_t *ra_ss;
-  /// RA Coreset
-  NR_ControlResourceSet_t *coreset;
-  NR_sched_pdcch_t sched_pdcch;
-  // Beam index
-  uint8_t beam_id;
-  /// CellGroup for UE that is to come (NSA is non-null, null for SA)
-  NR_CellGroupConfig_t *CellGroup;
   /// Preambles for contention-free access
   NR_preamble_ue_t preambles;
   int contention_resolution_timer;
   nr_ra_type_t ra_type;
   /// CFRA flag
   bool cfra;
-  // BWP for RA
-  NR_UE_DL_BWP_t DL_BWP;
-  NR_UE_UL_BWP_t UL_BWP;
-  NR_UE_ServingCell_Info_t sc_info;
 } NR_RA_t;
 
 /*! \brief gNB common channels */
@@ -288,8 +273,6 @@ typedef struct {
   /// used for otherSIB data
   uint8_t other_sib_bcch_pdu[2][NR_MAX_SIB_LENGTH / 8];
   int other_sib_bcch_length[2];
-  /// Template for RA computations
-  NR_RA_t ra[NR_NB_RA_PROC_MAX];
   /// VRB map for common channels
   uint16_t vrb_map[MAX_NUM_BEAM_PERIODS][275];
   /// VRB map for common channels and PUSCH, dynamically allocated because
@@ -410,6 +393,11 @@ typedef struct NR_pusch_dmrs {
   uint16_t ul_dmrs_symb_pos;
   uint8_t num_dmrs_cdm_grps_no_data;
   nfapi_nr_dmrs_type_e dmrs_config_type;
+  int dmrs_scrambling_id;
+  int pusch_identity;
+  int scid;
+  int low_papr_sequence_number;
+  NR_PTRS_UplinkConfig_t *ptrsConfig;
 } NR_pusch_dmrs_t;
 
 typedef struct NR_sched_pusch {
@@ -431,7 +419,6 @@ typedef struct NR_sched_pusch {
 
   /// UL HARQ PID to use for this UE, or -1 for "any new"
   int8_t ul_harq_pid;
-
   uint8_t nrOfLayers;
   int tpmi;
 
@@ -439,6 +426,7 @@ typedef struct NR_sched_pusch {
   int time_domain_allocation;
   NR_tda_info_t tda_info;
   NR_pusch_dmrs_t dmrs_info;
+  bwp_info_t bwp_info;
   int phr_txpower_calc;
 } NR_sched_pusch_t;
 
@@ -454,7 +442,10 @@ typedef struct NR_pdsch_dmrs {
   uint8_t N_DMRS_SLOT;
   uint16_t dl_dmrs_symb_pos;
   uint8_t numDmrsCdmGrpsNoData;
+  uint32_t scrambling_id;
+  int n_scid;
   nfapi_nr_dmrs_type_e dmrsConfigType;
+  NR_PTRS_DownlinkConfig_t *phaseTrackingRS;
 } NR_pdsch_dmrs_t;
 
 typedef struct NR_sched_pdsch {
@@ -478,7 +469,7 @@ typedef struct NR_sched_pdsch {
 
   uint16_t pm_index;
   uint8_t nrOfLayers;
-
+  bwp_info_t bwp_info;
   NR_pdsch_dmrs_t dmrs_parms;
   // time_domain_allocation is the index of a list of tda
   int time_domain_allocation;
@@ -537,6 +528,8 @@ typedef struct RSRP_report {
   uint8_t nr_reports;
   uint8_t resource_id[MAX_NR_OF_REPORTED_RS];
   int RSRP[MAX_NR_OF_REPORTED_RS];
+  // SINR index according to tables 10.1.16.1-1, 10.1.16.1-2
+  int SINR_index[MAX_NR_OF_REPORTED_RS];
 } RSRP_report_t;
 
 struct CSI_Report {
@@ -577,6 +570,8 @@ typedef struct NR_QoS_config_s {
 
 typedef struct nr_lc_config {
   uint8_t lcid;
+  /// flag if corresponding RB is suspended
+  bool suspended;
   /// priority as specified in 38.321
   int priority;
   /// associated NSSAI for DRB
@@ -651,7 +646,6 @@ typedef struct {
   int pusch_snrx10;
   int pucch_snrx10;
   uint16_t ul_rssi;
-  uint8_t current_harq_pid;
   int pusch_consecutive_dtx_cnt;
   int pucch_consecutive_dtx_cnt;
   bool ul_failure;
@@ -690,10 +684,6 @@ typedef struct {
   // 0 - good channel, 1 - bad channel
   float pdcch_cl_adjust;
 } NR_UE_sched_ctrl_t;
-
-typedef struct {
-  uicc_t *uicc;
-} NRUEcontext_t;
 
 typedef struct NR_mac_dir_stats {
   uint64_t lc_bytes[64];
@@ -743,7 +733,20 @@ typedef struct nr_mac_rrc_ul_if_s {
   initial_ul_rrc_message_transfer_func_t initial_ul_rrc_message_transfer;
 } nr_mac_rrc_ul_if_t;
 
-typedef enum interrupt_followup_action { FOLLOW_INSYNC, FOLLOW_INSYNC_RECONFIG, FOLLOW_OUTOFSYNC  } interrupt_followup_action_t;
+typedef struct measgap_config {
+  bool enable;
+  int mgrp_ms;
+  long mgrp;
+  long gapOffset;
+  long mgta;
+  int n_slots_mgta;
+  int n_slots_advance;
+  float mgl_ms;
+  long mgl;
+  int mgl_slots;
+} measgap_config_t;
+
+typedef enum interrupt_followup_action { FOLLOW_INSYNC, FOLLOW_OUTOFSYNC } interrupt_followup_action_t;
 
 /*! \brief UE list used by gNB to order UEs/CC for scheduling*/
 typedef struct {
@@ -758,27 +761,27 @@ typedef struct {
   NR_mac_stats_t mac_stats;
   /// currently active CellGroupConfig
   NR_CellGroupConfig_t *CellGroup;
-  /// CellGroupConfig that is to be activated after the next reconfiguration
-  bool expect_reconfiguration;
-  /// reestablishRLC has to be signaled in RRCreconfiguration
-  bool reestablish_rlc;
-  NR_CellGroupConfig_t *reconfigCellGroup;
+  /// in case of reestablishment, old spCellConfig to apply after
+  /// reconfiguration
+  NR_SpCellConfig_t *reconfigSpCellConfig;
   interrupt_followup_action_t interrupt_action;
   NR_UE_NR_Capability_t *capability;
+  measgap_config_t measgap_config;
   // UE selected beam index
   uint8_t UE_beam_index;
-  bool Msg4_MsgB_ACKed;
   float ul_thr_ue;
   float dl_thr_ue;
   long pdsch_HARQ_ACK_Codebook;
   bool is_redcap;
+  NR_RA_t *ra;
 } NR_UE_info_t;
 
 typedef struct {
   /// scheduling control info
   // last element always NULL
   pthread_mutex_t mutex;
-  NR_UE_info_t *list[MAX_MOBILES_PER_GNB+1];
+  NR_UE_info_t *connected_ue_list[MAX_MOBILES_PER_GNB + 1];
+  NR_UE_info_t *access_ue_list[NR_NB_RA_PROC_MAX + 1];
   // bitmap of CSI-RS already scheduled in current slot
   int sched_csirs;
   uid_allocator_t uid_allocator;
@@ -868,39 +871,23 @@ typedef struct gNB_MAC_INST_s {
 
   NR_UEs_t UE_info;
 
-  /// UL handle
-  uint32_t ul_handle;
-  //UE_info_t UE_info;
-
   // MAC function execution peformance profiler
-  /// processing time of eNB scheduler
-  time_stats_t eNB_scheduler;
-  /// processing time of eNB scheduler for SI
-  time_stats_t schedule_si;
-  /// processing time of eNB scheduler for Random access
+  /// processing time of gNB scheduler
+  time_stats_t gNB_scheduler;
+  /// processing time of gNB scheduler for Random access
   time_stats_t schedule_ra;
-  /// processing time of eNB ULSCH scheduler
-  time_stats_t schedule_ulsch;
-  /// processing time of eNB DCI generation
-  time_stats_t fill_DLSCH_dci;
-  /// processing time of eNB MAC preprocessor
-  time_stats_t schedule_dlsch_preprocessor;
-  /// processing time of eNB DLSCH scheduler
+  /// processing time of gNB DLSCH scheduler
+  time_stats_t schedule_ulsch;  // include preprocessor
+  /// processing time of gNB DLSCH scheduler
   time_stats_t schedule_dlsch;  // include rlc_data_req + MAC header + preprocessor
   /// processing time of rlc_data_req
   time_stats_t rlc_data_req;
-  /// processing time of rlc_status_ind
-  time_stats_t rlc_status_ind;
   /// processing time of nr_srs_ri_computation
   time_stats_t nr_srs_ri_computation_timer;
   /// processing time of nr_srs_tpmi_estimation
   time_stats_t nr_srs_tpmi_computation_timer;
-  /// processing time of eNB MCH scheduler
-  time_stats_t schedule_mch;
-  /// processing time of eNB ULSCH reception
+  /// processing time of gNB ULSCH reception
   time_stats_t rx_ulsch_sdu;  // include rlc_data_ind
-  /// processing time of eNB PCH scheduler
-  time_stats_t schedule_pch;
 
   NR_beam_info_t beam_info;
 
@@ -915,6 +902,7 @@ typedef struct gNB_MAC_INST_s {
   nr_pp_impl_ul pre_processor_ul;
 
   nr_mac_config_t radio_config;
+  nr_rlc_configuration_t rlc_config;
 
   NR_UE_sched_ctrl_t *sched_ctrlCommon;
   NR_sched_pdcch_t *sched_pdcch_otherSI;
@@ -925,7 +913,7 @@ typedef struct gNB_MAC_INST_s {
   bool first_MIB;
   NR_bler_options_t dl_bler;
   NR_bler_options_t ul_bler;
-  uint8_t min_grant_prb;
+  uint16_t min_grant_prb;
   bool identity_pm;
   int precoding_matrix_size[NR_MAX_NB_LAYERS];
   int fapi_beam_index[MAX_NUM_OF_SSB];
@@ -936,7 +924,7 @@ typedef struct gNB_MAC_INST_s {
   pthread_mutex_t sched_lock;
 
   mac_stats_t mac_stats;
-
+  uint64_t num_scheduled_prach_rx;
 } gNB_MAC_INST;
 
 #endif /*__LAYER2_NR_MAC_GNB_H__ */
