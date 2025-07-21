@@ -2,7 +2,7 @@ name: Build & Push OAI gNB (AW2S) image
 
 on:
   push:
-    branches: [ develop ]
+    branches: [ test ]
     paths:
       - 'docker/**'
       - '.github/workflows/build-ran.yml'
@@ -11,7 +11,7 @@ on:
 env:
   GHCR_USER: ziyad-mabrouk
   REPO_NAME: openairinterface5g
-  RAN_TAG: test
+  RAN_TAG: test2
 
 jobs:
 
