@@ -1,4 +1,4 @@
-name: Build & Push OAI gNB (AW2S) image
+name: Build & Push OAI gNB images
 
 on:
   push:
@@ -41,6 +41,7 @@ jobs:
           --tag ran-build:latest \
           -f docker/Dockerfile.build.ubuntu22 \
           .
+
     - name: Build oai-gnb-aw2s
       run: |
         docker build \
@@ -49,11 +50,26 @@ jobs:
           --tag oai-gnb-aw2s:${{ env.RAN_TAG }} \
           -f docker/Dockerfile.gNB.aw2s.ubuntu22 \
           .
+          
+    - name: Build oai-gnb
+      run: |
+        docker build \
+          --no-cache \
+          --target oai-gnb \
+          --tag oai-gnb:${{ env.RAN_TAG }} \
+          -f docker/Dockerfile.gNB.ubuntu22 \
+          .
 
-    - name: Tag and push to GHCR
+    - name: Tag and push aw2s image to GHCR
       run: |
         IMAGE_URI=ghcr.io/${{ env.GHCR_USER }}/${{ env.REPO_NAME }}/oai-gnb-aw2s:${{ env.RAN_TAG }}
         docker tag oai-gnb-aw2s:${{ env.RAN_TAG }} "$IMAGE_URI"
+        docker push "$IMAGE_URI"
+
+    - name: Tag and push uhd image to GHCR
+      run: |
+        IMAGE_URI=ghcr.io/${{ env.GHCR_USER }}/${{ env.REPO_NAME }}/oai-gnb:${{ env.RAN_TAG }}
+        docker tag oai-gnb:${{ env.RAN_TAG }} "$IMAGE_URI"
         docker push "$IMAGE_URI"
 
     - name: Log out of GHCR
